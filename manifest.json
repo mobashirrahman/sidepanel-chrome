@@ -1,0 +1,35 @@
+{
+  "name": "Edge Copilot Sidebar",
+  "version": "1.0",
+  "description": "Mimics the Edge sidebar with Copilot and pinned sites.",
+  "manifest_version": 3,
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess",
+    "contextMenus",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ruleset_1",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
+  "action": {
+    "default_title": "Open Sidebar"
+  }
+}
