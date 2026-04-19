@@ -1,7 +1,7 @@
 {
-  "name": "Edge Copilot Sidebar",
+  "name": "AI Sidekick",
   "version": "1.0",
-  "description": "Mimics the Edge sidebar with Copilot and pinned sites.",
+  "description": "Your AI chat companion and multitasking sidebar.",
   "manifest_version": 3,
   "permissions": [
     "sidePanel",
