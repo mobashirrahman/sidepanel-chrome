@@ -188,26 +188,61 @@
     </div>
   </div>
 
-  <!-- Add Pin Modal -->
-  <div id="add-modal" class="modal-overlay hidden">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2>Pin a Website</h2>
-        <button class="close-btn" id="close-add">&times;</button>
+  <!-- Pin Picker Panel (replaces simple add modal) -->
+  <div id="pin-picker" class="pin-picker hidden">
+    <div class="pin-picker-header">
+      <div class="pin-picker-title-row">
+        <span class="pin-picker-title">Add to Sidebar</span>
+        <button id="close-pin-picker" class="pin-picker-close">&times;</button>
       </div>
-      <div class="modal-body">
-        <div class="form-group">
-          <label for="pin-url">Website Link</label>
-          <input type="text" id="pin-url" placeholder="example.com" class="text-input">
+      <div class="pin-picker-search-wrap">
+        <svg class="pin-picker-search-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+          <path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+        </svg>
+        <input type="text" id="pin-picker-search" class="pin-picker-search" placeholder="Search">
+      </div>
+    </div>
+
+    <div class="pin-picker-body">
+      <!-- Quick Access -->
+      <div id="quick-access-section">
+        <h3 class="pin-picker-section-title">Quick access</h3>
+        <div id="quick-access-grid" class="quick-access-grid"></div>
+      </div>
+
+      <!-- Pin Current Tab -->
+      <button id="add-current-tab-btn" class="pin-current-tab-btn">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M20 3H4v10c0 1.1.9 2 2 2h6v2H8v2h8v-2h-4v-2h6c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 12H6V5h14v10z"/></svg>
+        Pin Current Active Tab
+      </button>
+
+      <!-- Discover More -->
+      <div id="discover-section">
+        <h3 class="pin-picker-section-title">Discover more</h3>
+        <div class="category-tabs">
+          <button class="cat-tab active" data-cat="all">For you</button>
+          <button class="cat-tab" data-cat="ai">AI</button>
+          <button class="cat-tab" data-cat="social">Social</button>
+          <button class="cat-tab" data-cat="productivity">Productivity</button>
+          <button class="cat-tab" data-cat="video">Video</button>
+          <button class="cat-tab" data-cat="music">Music</button>
+          <button class="cat-tab" data-cat="shopping">Shopping</button>
+          <button class="cat-tab" data-cat="news">News</button>
         </div>
-        <button id="add-custom-link-btn" class="primary-btn">Pin Website</button>
+        <div id="discover-list" class="discover-list"></div>
+      </div>
 
-        <div class="divider text-divider"><span>OR</span></div>
-
-        <button id="add-current-tab-btn" class="secondary-btn">Pin Current Active Tab</button>
+      <!-- Custom URL -->
+      <div class="custom-url-section">
+        <h3 class="pin-picker-section-title">Custom URL</h3>
+        <div class="custom-url-row">
+          <input type="text" id="pin-url" placeholder="example.com" class="pin-picker-url-input">
+          <button id="add-custom-link-btn" class="pin-url-btn">Pin</button>
+        </div>
       </div>
     </div>
   </div>
+
 
   <!-- Welcome Modal (AI Selection) -->
   <div id="welcome-modal" class="modal-overlay hidden">

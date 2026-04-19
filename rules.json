@@ -30,5 +30,54 @@
     "condition": {
       "resourceTypes": ["sub_frame"]
     }
+  },
+  {
+    "id": 3,
+    "priority": 3,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { 
+          "header": "User-Agent", 
+          "operation": "set", 
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        },
+        {
+          "header": "Sec-Ch-Ua",
+          "operation": "set",
+          "value": "\"Not/A)Brand\";v=\"99\", \"Mobile Safari\";v=\"17\""
+        },
+        {
+          "header": "Sec-Ch-Ua-Mobile",
+          "operation": "set",
+          "value": "?1"
+        },
+        {
+          "header": "Sec-Ch-Ua-Platform",
+          "operation": "set",
+          "value": "\"iOS\""
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||instagram.com",
+      "resourceTypes": ["sub_frame", "main_frame", "xmlhttprequest", "script", "stylesheet", "image", "media", "font", "other"]
+    }
+  },
+  {
+    "id": 4,
+    "priority": 3,
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [
+        { "header": "x-frame-options", "operation": "remove" },
+        { "header": "content-security-policy", "operation": "remove" },
+        { "header": "content-security-policy-report-only", "operation": "remove" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||instagram.com",
+      "resourceTypes": ["sub_frame", "main_frame"]
+    }
   }
 ]

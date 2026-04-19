@@ -8,9 +8,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const settingsBtn = document.getElementById('settings-btn');
   const closeSettings = document.getElementById('close-settings');
   
-  const addModal = document.getElementById('add-modal');
   const addBtn = document.getElementById('add-btn');
-  const closeAdd = document.getElementById('close-add');
+  const pinPicker = document.getElementById('pin-picker');
+  const closePinPicker = document.getElementById('close-pin-picker');
+  const pinPickerSearch = document.getElementById('pin-picker-search');
   
   // Settings Inputs
   const aiProviderSelect = document.getElementById('ai-provider');
@@ -64,6 +65,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Load Initial Settings
   let currentAiProvider = 'https://chatgpt.com/';
+  let currentViewUrl = 'https://chatgpt.com/'; // tracks the currently visible URL
   let defaultSearchEngine = '';
   let desktopSites = [];
   let hiddenDefaultApps = [];
@@ -117,11 +119,9 @@ document.addEventListener('DOMContentLoaded', () => {
     updateHomeIcon(currentAiProvider);
     // Pre-load the AI iframe immediately so it's ready before user clicks
     aiFrame.src = currentAiProvider;
-    // Main frame stays blank (hidden behind ai-frame until user picks another app)
-    iframe.src = 'about:blank';
+    currentViewUrl = currentAiProvider;
     // Show AI frame by default
     aiFrame.style.zIndex = '2';
-    iframe.style.zIndex = '1';
     setActiveIcon(currentAiProvider);
   });
 
@@ -145,27 +145,82 @@ document.addEventListener('DOMContentLoaded', () => {
     if (cb) cb.checked = show;
   };
 
-  // Basic frame loading handling
-  iframe.addEventListener('load', () => {
-    loading.classList.add('hidden');
-  });
+  // LRU iframe cache pool — preserves last 3 visited pinned sites
+  const CACHE_LIMIT = 3;
+  const iframeCache = new Map(); // url -> iframe element (ordered by recency)
+  const iframeContainer = document.querySelector('.iframe-container');
+
+  function getOrCreateCachedFrame(url) {
+    if (iframeCache.has(url)) {
+      // Move to end (most recently used)
+      const frame = iframeCache.get(url);
+      iframeCache.delete(url);
+      iframeCache.set(url, frame);
+      return { frame, isNew: false };
+    }
+
+    // Evict least recently used if at limit
+    if (iframeCache.size >= CACHE_LIMIT) {
+      const oldestUrl = iframeCache.keys().next().value;
+      const oldestFrame = iframeCache.get(oldestUrl);
+      oldestFrame.remove();
+      iframeCache.delete(oldestUrl);
+    }
+
+    // Create a new cached iframe
+    const frame = document.createElement('iframe');
+    frame.frameBorder = '0';
+    frame.allow = 'clipboard-read; clipboard-write; microphone; camera;';
+    frame.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;';
+    frame.addEventListener('load', () => loading.classList.add('hidden'));
+    iframeContainer.appendChild(frame);
+    iframeCache.set(url, frame);
+    return { frame, isNew: true };
+  }
+
+  function hideAllCachedFrames() {
+    iframeCache.forEach(frame => { frame.style.zIndex = '1'; });
+  }
 
   function loadUrl(url) {
+    currentViewUrl = url;
     // If loading the AI provider, just bring the ai-frame to front (no reload)
     if (url === currentAiProvider) {
+      hideAllCachedFrames();
       aiFrame.style.zIndex = '2';
-      iframe.style.zIndex = '1';
       return;
     }
-    // Otherwise show the main frame on top
+
+    // Push AI frame to back
     aiFrame.style.zIndex = '1';
-    iframe.style.zIndex = '2';
-    loading.classList.remove('hidden');
+
+    // Local extension pages don't need caching
     if (url.startsWith('local:')) {
-      iframe.src = chrome.runtime.getURL(url.replace('local:', ''));
-    } else {
-      iframe.src = url;
+      hideAllCachedFrames();
+      loading.classList.remove('hidden');
+      // Reuse a single local frame (no point caching extension pages)
+      let localFrame = iframeCache.get('__local__');
+      if (!localFrame) {
+        localFrame = document.createElement('iframe');
+        localFrame.frameBorder = '0';
+        localFrame.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;z-index:2;';
+        localFrame.addEventListener('load', () => loading.classList.add('hidden'));
+        iframeContainer.appendChild(localFrame);
+        iframeCache.set('__local__', localFrame);
+      }
+      localFrame.src = chrome.runtime.getURL(url.replace('local:', ''));
+      localFrame.style.zIndex = '2';
+      return;
     }
+
+    // Use LRU cache for regular pinned sites
+    hideAllCachedFrames();
+    const { frame, isNew } = getOrCreateCachedFrame(url);
+    if (isNew) {
+      loading.classList.remove('hidden');
+      frame.src = url;
+    }
+    frame.style.zIndex = '2';
   }
 
   function updateHomeIcon(url) {
@@ -300,7 +355,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       bindIconEvents();
       bindDragEvents();
-      setActiveIcon(iframe.src);
+      setActiveIcon(currentViewUrl);
     });
   }
 
@@ -469,14 +524,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Add/Remove Pin Logic
-  addBtn.addEventListener('click', () => {
-    pinUrlInput.value = '';
-    addModal.classList.remove('hidden');
-  });
-  
-  closeAdd.addEventListener('click', () => addModal.classList.add('hidden'));
+  addBtn.addEventListener('click', () => openPinPicker());
+  closePinPicker.addEventListener('click', () => pinPicker.classList.add('hidden'));
 
-  function addPin(url, title = null) {
+  function addPin(url, title = null, closeAfter = true) {
     let finalUrl = url.trim();
     if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
       finalUrl = 'https://' + finalUrl;
@@ -492,10 +543,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!pinnedSites.find(s => s.url === finalUrl)) {
           pinnedSites.push({ url: finalUrl, title: siteTitle });
           chrome.storage.local.set({ pinnedSites }, () => {
-            addModal.classList.add('hidden');
+            if (closeAfter) pinPicker.classList.add('hidden');
+            refreshPinPickerState();
           });
         } else {
-          alert("This site is already pinned!");
+          if (closeAfter) alert("This site is already pinned!");
         }
       });
     } catch (e) {
@@ -509,7 +561,7 @@ document.addEventListener('DOMContentLoaded', () => {
       pinnedSites = pinnedSites.filter(s => s.url !== url);
       chrome.storage.local.set({ pinnedSites }, () => {
         renderPinnedSites();
-        if (iframe.src === url) {
+        if (currentViewUrl === url) {
           loadUrl(currentAiProvider);
           setActiveIcon(currentAiProvider);
         }
@@ -517,12 +569,155 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  addCustomLinkBtn.addEventListener('click', () => addPin(pinUrlInput.value));
+  addCustomLinkBtn.addEventListener('click', () => {
+    if (pinUrlInput.value.trim()) addPin(pinUrlInput.value);
+  });
+  pinUrlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && pinUrlInput.value.trim()) addPin(pinUrlInput.value);
+  });
   addCurrentTabBtn.addEventListener('click', () => {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0]) addPin(tabs[0].url, tabs[0].title);
+      if (tabs[0]) {
+        addPin(tabs[0].url, tabs[0].title);
+      }
     });
   });
+
+  // ============================================================
+  // Pin Picker - Curated Sites Data & Logic
+  // ============================================================
+  const CURATED_SITES = [
+    // Quick Access (also appears in discover)
+    { name: 'ChatGPT',         url: 'https://chatgpt.com/',              cat: 'ai',          desc: 'Leading AI chat assistant',           quickAccess: true },
+    { name: 'Reddit',          url: 'https://www.reddit.com/',           cat: 'social',      desc: 'The front page of the internet',       quickAccess: true },
+    { name: 'Gmail',           url: 'https://mail.google.com/',          cat: 'productivity',desc: 'Google email service',                 quickAccess: true },
+    { name: 'Google Translate',url: 'https://translate.google.com/',     cat: 'tools',       desc: 'Translate text and websites',          quickAccess: true },
+    { name: 'Google',          url: 'https://www.google.com/',           cat: 'tools',       desc: 'Search the web',                       quickAccess: true },
+    { name: 'Google Drive',    url: 'https://drive.google.com/',         cat: 'productivity',desc: 'Store and share files in the cloud',    quickAccess: true },
+    { name: 'Facebook',        url: 'https://www.facebook.com/',         cat: 'social',      desc: 'Connect with friends and family',       quickAccess: true },
+    { name: 'DeepL',           url: 'https://www.deepl.com/',            cat: 'tools',       desc: 'Accurate AI-powered translations',      quickAccess: true },
+    // Discover list
+    { name: 'Claude',          url: 'https://claude.ai/',                cat: 'ai',          desc: 'AI assistant by Anthropic' },
+    { name: 'Gemini',          url: 'https://gemini.google.com/',        cat: 'ai',          desc: 'AI assistant by Google' },
+    { name: 'Perplexity',      url: 'https://www.perplexity.ai/',        cat: 'ai',          desc: 'AI-powered search engine' },
+    { name: 'DeepSeek',        url: 'https://chat.deepseek.com/',        cat: 'ai',          desc: 'Open-source AI assistant' },
+    { name: 'Grok',            url: 'https://grok.com/',                 cat: 'ai',          desc: 'AI assistant by xAI' },
+    { name: 'WhatsApp',        url: 'https://web.whatsapp.com/',         cat: 'social',      desc: 'Quickly send and receive messages' },
+    { name: 'Instagram',       url: 'https://www.instagram.com/',        cat: 'social',      desc: 'Connect with friends, share moments' },
+    { name: 'Twitter / X',     url: 'https://x.com/',                    cat: 'social',      desc: 'Join the conversation' },
+    { name: 'LinkedIn',        url: 'https://www.linkedin.com/',         cat: 'social',      desc: 'Professional networking' },
+    { name: 'Discord',         url: 'https://discord.com/app',           cat: 'social',      desc: 'Chat with your communities' },
+    { name: 'YouTube',         url: 'https://www.youtube.com/',          cat: 'video',       desc: 'Watch videos and live streams' },
+    { name: 'Netflix',         url: 'https://www.netflix.com/',          cat: 'video',       desc: 'Watch movies and TV shows' },
+    { name: 'Twitch',          url: 'https://www.twitch.tv/',            cat: 'video',       desc: 'Watch live game streams' },
+    { name: 'Spotify',         url: 'https://open.spotify.com/',         cat: 'music',       desc: 'Stream music and podcasts' },
+    { name: 'SoundCloud',      url: 'https://soundcloud.com/',           cat: 'music',       desc: 'Discover and share music' },
+    { name: 'Amazon',          url: 'https://www.amazon.com/',           cat: 'shopping',    desc: 'Shop millions of products' },
+    { name: 'Etsy',            url: 'https://www.etsy.com/',             cat: 'shopping',    desc: 'Unique handmade and vintage items' },
+    { name: 'Hacker News',     url: 'https://news.ycombinator.com/',     cat: 'news',        desc: 'Tech news and discussion' },
+    { name: 'BBC News',        url: 'https://www.bbc.com/news',          cat: 'news',        desc: 'World news coverage' },
+    { name: 'Notion',          url: 'https://www.notion.so/',            cat: 'productivity',desc: 'All-in-one workspace' },
+    { name: 'GitHub',          url: 'https://github.com/',               cat: 'productivity',desc: 'Build and ship software' },
+    { name: 'Trello',          url: 'https://trello.com/',               cat: 'productivity',desc: 'Visual project management' },
+    { name: 'Figma',           url: 'https://www.figma.com/',            cat: 'productivity',desc: 'Collaborative design tool' },
+    { name: 'Google Maps',     url: 'https://maps.google.com/',          cat: 'tools',       desc: 'Navigate and explore the world' },
+    { name: 'Stack Overflow',  url: 'https://stackoverflow.com/',        cat: 'tools',       desc: 'Q&A for developers' },
+    { name: 'Yahoo Mail',      url: 'https://mail.yahoo.com/',           cat: 'productivity',desc: 'Check your Yahoo email' },
+  ];
+
+  let currentPinPickerCat = 'all';
+
+  function faviconUrl(url) {
+    return `https://www.google.com/s2/favicons?sz=64&domain_url=${encodeURIComponent(url)}`;
+  }
+
+  function openPinPicker() {
+    pinUrlInput.value = '';
+    pinPickerSearch.value = '';
+    currentPinPickerCat = 'all';
+    document.querySelectorAll('.cat-tab').forEach(t => t.classList.toggle('active', t.dataset.cat === 'all'));
+    pinPicker.classList.remove('hidden');
+    renderPinPickerLists();
+    pinPickerSearch.focus();
+  }
+
+  function renderPinPickerLists() {
+    chrome.storage.local.get(['pinnedSites'], (result) => {
+      const pinned = (result.pinnedSites || []).map(s => s.url);
+      const query = pinPickerSearch.value.trim().toLowerCase();
+
+      // Quick Access Grid
+      const qaGrid = document.getElementById('quick-access-grid');
+      const qaItems = CURATED_SITES.filter(s => s.quickAccess);
+      qaGrid.innerHTML = '';
+      qaItems.forEach(site => {
+        if (query && !site.name.toLowerCase().includes(query) && !site.url.toLowerCase().includes(query)) return;
+        const isPinned = pinned.includes(site.url);
+        const btn = document.createElement('button');
+        btn.className = 'qa-item' + (isPinned ? ' already-pinned' : '');
+        btn.title = isPinned ? 'Already pinned' : `Pin ${site.name}`;
+        btn.innerHTML = `
+          <div class="qa-icon-wrap">
+            <img src="${faviconUrl(site.url)}" alt="">
+          </div>
+          <span class="qa-label">${site.name}</span>`;
+        btn.addEventListener('click', () => {
+          if (!isPinned) addPin(site.url, site.name, false);
+        });
+        qaGrid.appendChild(btn);
+      });
+
+      // Show/hide quick access section
+      document.getElementById('quick-access-section').style.display = qaGrid.children.length === 0 ? 'none' : '';
+
+      // Discover List
+      const discoverList = document.getElementById('discover-list');
+      const discoverItems = CURATED_SITES.filter(s => !s.quickAccess);
+      discoverList.innerHTML = '';
+      discoverItems.forEach(site => {
+        const matchesCat = currentPinPickerCat === 'all' || site.cat === currentPinPickerCat;
+        const matchesQuery = !query || site.name.toLowerCase().includes(query) || site.url.toLowerCase().includes(query);
+        if (!matchesCat || !matchesQuery) return;
+        const isPinned = pinned.includes(site.url);
+        const item = document.createElement('div');
+        item.className = 'discover-item';
+        item.innerHTML = `
+          <div class="discover-icon"><img src="${faviconUrl(site.url)}" alt=""></div>
+          <div class="discover-info">
+            <div class="discover-name">${site.name}</div>
+            <div class="discover-desc">${site.desc}</div>
+          </div>
+          <button class="discover-pin-btn ${isPinned ? 'pinned' : ''}" title="${isPinned ? 'Already pinned' : 'Pin'}">${isPinned ? '✓' : '+'}</button>`;
+        item.querySelector('.discover-pin-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!isPinned) addPin(site.url, site.name, false);
+        });
+        item.addEventListener('click', () => {
+          if (!isPinned) addPin(site.url, site.name, false);
+        });
+        discoverList.appendChild(item);
+      });
+    });
+  }
+
+  function refreshPinPickerState() {
+    if (!pinPicker.classList.contains('hidden')) {
+      renderPinPickerLists();
+    }
+  }
+
+  // Category tab clicks
+  document.querySelectorAll('.cat-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.cat-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      currentPinPickerCat = tab.dataset.cat;
+      renderPinPickerLists();
+    });
+  });
+
+  // Search input
+  pinPickerSearch.addEventListener('input', () => renderPinPickerLists());
 
   // App Bar Actions & Logic
   barSplit.addEventListener('click', () => {
@@ -591,16 +786,19 @@ document.addEventListener('DOMContentLoaded', () => {
   barMenu.addEventListener('click', (e) => e.stopPropagation());
 
   barOpenMain.addEventListener('click', () => {
-    chrome.tabs.create({ url: iframe.src });
+    chrome.tabs.create({ url: currentViewUrl });
   });
 
   menuRefresh.addEventListener('click', () => {
-    loadUrl(iframe.src);
+    // Force reload by removing from cache then reloading
+    const cached = iframeCache.get(currentViewUrl);
+    if (cached) { cached.remove(); iframeCache.delete(currentViewUrl); }
+    loadUrl(currentViewUrl);
     barMenu.classList.add('hidden');
   });
 
   menuCopy.addEventListener('click', () => {
-    navigator.clipboard.writeText(iframe.src).then(() => {
+    navigator.clipboard.writeText(currentViewUrl).then(() => {
       const originalText = menuCopy.textContent;
       menuCopy.textContent = "Copied!";
       setTimeout(() => { menuCopy.textContent = originalText; barMenu.classList.add('hidden'); }, 1000);
@@ -613,9 +811,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   barClose.addEventListener('click', () => {
-    // Prompt exactly like the logic above, or just auto-close (delete).
     if (confirm(`Remove this pinned site permanently?`)) {
-      deletePin(iframe.src);
+      deletePin(currentViewUrl);
     }
   });
 
@@ -663,7 +860,7 @@ document.addEventListener('DOMContentLoaded', () => {
   menuDesktopBtn.addEventListener('click', () => {
     desktopToggle.checked = !desktopToggle.checked;
     try {
-      const hostname = new URL(iframe.src).hostname;
+      const hostname = new URL(currentViewUrl).hostname;
       if (desktopToggle.checked && !desktopSites.includes(hostname)) {
         desktopSites.push(hostname);
       } else if (!desktopToggle.checked && desktopSites.includes(hostname)) {
@@ -672,8 +869,10 @@ document.addEventListener('DOMContentLoaded', () => {
       
       chrome.storage.local.set({ desktopSites }, () => {
         updateDesktopModeRulsets(hostname, desktopToggle.checked);
-        // Refresh frame to apply
-        loadUrl(iframe.src);
+        // Force reload from cache
+        const cached = iframeCache.get(currentViewUrl);
+        if (cached) { cached.remove(); iframeCache.delete(currentViewUrl); }
+        loadUrl(currentViewUrl);
         barMenu.classList.add('hidden');
       });
     } catch {}
