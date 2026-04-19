@@ -61,8 +61,11 @@
       </div>
       
       <div id="primary-workspace" class="workspace">
-        <div class="iframe-container">
-          <iframe id="main-frame" src="https://copilot.microsoft.com/" frameborder="0" allow="clipboard-read; clipboard-write; microphone; camera;"></iframe>
+        <div class="iframe-container" style="position:relative;">
+          <!-- Always-alive AI iframe, pre-loaded on open -->
+          <iframe id="ai-frame" src="about:blank" frameborder="0" allow="clipboard-read; clipboard-write; microphone; camera;" style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;"></iframe>
+          <!-- Regular content iframe for pinned sites/apps -->
+          <iframe id="main-frame" src="about:blank" frameborder="0" allow="clipboard-read; clipboard-write; microphone; camera;" style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:2;"></iframe>
           <!-- Optional loading overlay -->
           <div id="loading" class="hidden">
             <div class="spinner"></div>

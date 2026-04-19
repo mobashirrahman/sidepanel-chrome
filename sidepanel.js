@@ -60,6 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const secondaryWorkspace = document.getElementById('secondary-workspace');
   const splitDivider = document.getElementById('split-divider');
   const secondaryFrame = document.getElementById('secondary-frame');
+  const aiFrame = document.getElementById('ai-frame');
 
   // Load Initial Settings
   let currentAiProvider = 'https://chatgpt.com/';
@@ -114,8 +115,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     updateHomeIcon(currentAiProvider);
-    // Initialize frame with AI Provider
-    loadUrl(currentAiProvider);
+    // Pre-load the AI iframe immediately so it's ready before user clicks
+    aiFrame.src = currentAiProvider;
+    // Main frame stays blank (hidden behind ai-frame until user picks another app)
+    iframe.src = 'about:blank';
+    // Show AI frame by default
+    aiFrame.style.zIndex = '2';
+    iframe.style.zIndex = '1';
     setActiveIcon(currentAiProvider);
   });
 
@@ -145,6 +151,15 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   function loadUrl(url) {
+    // If loading the AI provider, just bring the ai-frame to front (no reload)
+    if (url === currentAiProvider) {
+      aiFrame.style.zIndex = '2';
+      iframe.style.zIndex = '1';
+      return;
+    }
+    // Otherwise show the main frame on top
+    aiFrame.style.zIndex = '1';
+    iframe.style.zIndex = '2';
     loading.classList.remove('hidden');
     if (url.startsWith('local:')) {
       iframe.src = chrome.runtime.getURL(url.replace('local:', ''));
@@ -193,6 +208,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Handle App Bar Visibility & State
     if (url === currentAiProvider) {
       appBar.classList.add('hidden');
+      // Bring AI frame to front
+      aiFrame.style.zIndex = '2';
+      iframe.style.zIndex = '1';
       
       // Auto-collapse split view when dropping back to Home AI to prevent duplicates
       if (isSplitView) {
@@ -368,11 +386,11 @@ document.addEventListener('DOMContentLoaded', () => {
     currentAiProvider = newVal;
     chrome.storage.local.set({ aiProvider: newVal, aiProviderHasBeenSet: true });
     updateHomeIcon(newVal);
-    
-    if (homeAiIcon.classList.contains('active')) {
-      loadUrl(newVal);
-      setActiveIcon(newVal);
-    }
+    // Always keep the AI frame warm with the new provider
+    aiFrame.src = newVal;
+    aiFrame.style.zIndex = '2';
+    iframe.style.zIndex = '1';
+    setActiveIcon(newVal);
   }
 
   aiProviderSelect.addEventListener('change', (e) => {
