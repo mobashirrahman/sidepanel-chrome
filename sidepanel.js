@@ -255,7 +255,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderPinnedSites() {
     chrome.storage.local.get(['pinnedSites'], (result) => {
-      const sites = result.pinnedSites || [];
+      let sites = result.pinnedSites;
+      if (!sites) {
+        sites = [
+          { url: 'https://translate.google.com/', title: 'Google Translate' },
+          { url: 'https://claude.ai/', title: 'Claude' },
+          { url: 'https://gemini.google.com/', title: 'Gemini' }
+        ];
+        chrome.storage.local.set({ pinnedSites: sites });
+      }
+      
       pinnedContainer.innerHTML = '';
       sites.forEach((site, index) => {
         const div = document.createElement('div');
