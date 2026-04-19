@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Tools</title>
+  <link rel="stylesheet" href="tools.css">
+</head>
+<body>
+  <div class="tools-container">
+    <div class="tabs">
+      <button class="tab active" data-target="calc-view">Calculator</button>
+      <button class="tab" data-target="conv-view">Converter</button>
+    </div>
+
+    <!-- Calculator View -->
+    <div id="calc-view" class="view active">
+      <div class="calculator">
+        <div class="display">
+          <div class="history" id="calc-history"></div>
+          <div class="current" id="calc-current">0</div>
+        </div>
+        <div class="keypad">
+          <button class="btn fn" data-val="C">C</button>
+          <button class="btn fn" data-val="DEL">⌫</button>
+          <button class="btn op" data-val="%">%</button>
+          <button class="btn op" data-val="/">÷</button>
+          
+          <button class="btn num" data-val="7">7</button>
+          <button class="btn num" data-val="8">8</button>
+          <button class="btn num" data-val="9">9</button>
+          <button class="btn op" data-val="*">×</button>
+          
+          <button class="btn num" data-val="4">4</button>
+          <button class="btn num" data-val="5">5</button>
+          <button class="btn num" data-val="6">6</button>
+          <button class="btn op" data-val="-">−</button>
+          
+          <button class="btn num" data-val="1">1</button>
+          <button class="btn num" data-val="2">2</button>
+          <button class="btn num" data-val="3">3</button>
+          <button class="btn op" data-val="+">+</button>
+          
+          <button class="btn fn" data-val="±">±</button>
+          <button class="btn num" data-val="0">0</button>
+          <button class="btn num" data-val=".">.</button>
+          <button class="btn eq" data-val="=">=</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Converter View -->
+    <div id="conv-view" class="view">
+      <div class="converter">
+        <div class="form-group">
+          <label>Type</label>
+          <select id="conv-type">
+            <option value="length">Length</option>
+            <option value="weight">Weight / Mass</option>
+            <option value="temperature">Temperature</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>From</label>
+          <div class="input-group">
+            <input type="number" id="conv-from-val" value="1">
+            <select id="conv-from-unit"></select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>To</label>
+          <div class="input-group">
+            <input type="number" id="conv-to-val" readonly>
+            <select id="conv-to-unit"></select>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="tools.js"></script>
+</body>
+</html>

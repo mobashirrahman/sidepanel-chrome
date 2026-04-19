@@ -14,7 +14,19 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Settings Inputs
   const aiProviderSelect = document.getElementById('ai-provider');
+  const customAiUrlInput = document.getElementById('custom-ai-url');
+  const searchProviderSelect = document.getElementById('search-provider');
   const appearanceRadios = document.getElementsByName('appearanceMode');
+
+  // Welcome / Search Modals
+  const welcomeModal = document.getElementById('welcome-modal');
+  const welcomeAiProvider = document.getElementById('welcome-ai-provider');
+  const welcomeCustomAi = document.getElementById('welcome-custom-ai');
+  const welcomeSaveBtn = document.getElementById('welcome-save-btn');
+  
+  const searchModal = document.getElementById('search-modal');
+  const welcomeSearchProvider = document.getElementById('welcome-search-provider');
+  const searchSaveBtn = document.getElementById('search-save-btn');
   
   // Add Pin Inputs
   const pinUrlInput = document.getElementById('pin-url');
@@ -44,19 +56,43 @@ document.addEventListener('DOMContentLoaded', () => {
   const barClose = document.getElementById('bar-close');
 
   // Split View Elements
+  const primaryWorkspace = document.getElementById('primary-workspace');
   const secondaryWorkspace = document.getElementById('secondary-workspace');
   const splitDivider = document.getElementById('split-divider');
   const secondaryFrame = document.getElementById('secondary-frame');
 
   // Load Initial Settings
   let currentAiProvider = 'https://copilot.microsoft.com/';
+  let defaultSearchEngine = '';
   let desktopSites = [];
+  let hiddenDefaultApps = [];
   let isSplitView = false;
   
-  chrome.storage.local.get(['aiProvider', 'appearanceMode', 'desktopSites'], (result) => {
+  chrome.storage.local.get(['aiProvider', 'aiProviderHasBeenSet', 'defaultSearchEngine', 'appearanceMode', 'desktopSites', 'hiddenDefaultApps'], (result) => {
+    if (!result.aiProviderHasBeenSet) {
+      welcomeModal.classList.remove('hidden');
+    }
+
     if (result.aiProvider) {
       currentAiProvider = result.aiProvider;
-      aiProviderSelect.value = currentAiProvider;
+      
+      // Check if it's a known provider or custom
+      const options = Array.from(aiProviderSelect.options).map(o => o.value);
+      if (!options.includes(currentAiProvider) && currentAiProvider !== 'custom') {
+        aiProviderSelect.value = 'custom';
+        customAiUrlInput.value = currentAiProvider;
+        customAiUrlInput.classList.remove('hidden');
+      } else {
+        aiProviderSelect.value = currentAiProvider;
+      }
+    }
+
+    if (result.defaultSearchEngine) {
+      defaultSearchEngine = result.defaultSearchEngine;
+      searchProviderSelect.value = defaultSearchEngine;
+      // Update search icon URL
+      const searchIcon = document.getElementById('search-icon');
+      if (searchIcon) searchIcon.dataset.url = defaultSearchEngine;
     }
     
     if (result.appearanceMode) {
@@ -69,11 +105,39 @@ document.addEventListener('DOMContentLoaded', () => {
       desktopSites = result.desktopSites;
     }
 
+    if (result.hiddenDefaultApps) {
+      hiddenDefaultApps = result.hiddenDefaultApps;
+      hiddenDefaultApps.forEach(appId => {
+        const el = document.getElementById(appId);
+        if (el) el.style.display = 'none';
+      });
+    }
+
     updateHomeIcon(currentAiProvider);
     // Initialize frame with AI Provider
     loadUrl(currentAiProvider);
     setActiveIcon(currentAiProvider);
   });
+
+  // Default App Visibility Toggle Logic
+  window.toggleDefaultAppVisibility = function(appId, show) {
+    const el = document.getElementById(appId);
+    if (!el) return;
+    
+    if (show) {
+      el.style.display = 'flex';
+      hiddenDefaultApps = hiddenDefaultApps.filter(id => id !== appId);
+    } else {
+      el.style.display = 'none';
+      if (!hiddenDefaultApps.includes(appId)) hiddenDefaultApps.push(appId);
+    }
+    
+    chrome.storage.local.set({ hiddenDefaultApps });
+    
+    // Update settings checkbox if it exists
+    const cb = document.getElementById(`toggle-${appId}`);
+    if (cb) cb.checked = show;
+  };
 
   // Basic frame loading handling
   iframe.addEventListener('load', () => {
@@ -82,7 +146,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function loadUrl(url) {
     loading.classList.remove('hidden');
-    iframe.src = url;
+    if (url.startsWith('local:')) {
+      iframe.src = chrome.runtime.getURL(url.replace('local:', ''));
+    } else {
+      iframe.src = url;
+    }
   }
 
   function updateHomeIcon(url) {
@@ -107,6 +175,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // try to find title from pinned list
     const el = document.querySelector(`.app-icon[data-url="${url}"]`);
     if (el && el.title) return el.title;
+    if (url.startsWith('local:')) {
+      const page = url.replace('local:', '').replace('.html', '');
+      return page.charAt(0).toUpperCase() + page.slice(1);
+    }
     try { return new URL(url).hostname; } catch { return url; }
   }
 
@@ -128,16 +200,19 @@ document.addEventListener('DOMContentLoaded', () => {
         secondaryWorkspace.classList.add('hidden');
         splitDivider.classList.add('hidden');
         barSplit.style.color = '';
+        primaryWorkspace.style.flex = '';
       }
     } else {
       appBar.classList.remove('hidden');
       appTitle.textContent = getSiteTitle(url);
-      appUrl.textContent = url;
+      appUrl.textContent = url.startsWith('local:') ? 'Extension App' : url;
       
       // Update toggles based on settings
       try {
-        const hostname = new URL(url).hostname;
-        desktopToggle.checked = desktopSites.includes(hostname);
+        if (!url.startsWith('local:')) {
+          const hostname = new URL(url).hostname;
+          desktopToggle.checked = desktopSites.includes(hostname);
+        }
       } catch {}
     }
   }
@@ -145,7 +220,17 @@ document.addEventListener('DOMContentLoaded', () => {
   function bindIconEvents() {
     document.querySelectorAll('.app-icon').forEach(icon => {
       icon.onclick = (e) => {
-        const targetUrl = icon.dataset.url;
+        let targetUrl = icon.dataset.url;
+        
+        // Special case for Search
+        if (icon.id === 'search-icon') {
+          if (!defaultSearchEngine) {
+            searchModal.classList.remove('hidden');
+            return;
+          }
+          targetUrl = defaultSearchEngine;
+        }
+
         setActiveIcon(targetUrl);
         loadUrl(targetUrl);
       };
@@ -153,7 +238,13 @@ document.addEventListener('DOMContentLoaded', () => {
       icon.oncontextmenu = (e) => {
         e.preventDefault();
         const targetUrl = icon.dataset.url;
-        if (icon.id === 'home-ai-icon' || targetUrl === 'https://www.bing.com/search?q=weather') return;
+        
+        if (icon.classList.contains('default-app') || icon.id === 'home-ai-icon') {
+          if (confirm(`Hide ${icon.title || 'this app'} from sidebar? You can re-enable it in Settings.`)) {
+            window.toggleDefaultAppVisibility(icon.id, false);
+          }
+          return;
+        }
         
         if (confirm(`Remove this pinned site?`)) {
           deletePin(targetUrl);
@@ -166,11 +257,13 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.storage.local.get(['pinnedSites'], (result) => {
       const sites = result.pinnedSites || [];
       pinnedContainer.innerHTML = '';
-      sites.forEach(site => {
+      sites.forEach((site, index) => {
         const div = document.createElement('div');
         div.className = 'app-icon';
         div.dataset.url = site.url;
+        div.dataset.index = index;
         div.title = site.title;
+        div.draggable = true;
         
         const img = document.createElement('img');
         img.src = `https://www.google.com/s2/favicons?sz=64&domain_url=${encodeURIComponent(site.url)}`;
@@ -179,7 +272,74 @@ document.addEventListener('DOMContentLoaded', () => {
         pinnedContainer.appendChild(div);
       });
       bindIconEvents();
+      bindDragEvents();
       setActiveIcon(iframe.src);
+    });
+  }
+
+  function bindDragEvents() {
+    const icons = pinnedContainer.querySelectorAll('.app-icon');
+    icons.forEach(icon => {
+      icon.addEventListener('dragstart', (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', icon.dataset.index);
+        icon.classList.add('dragging');
+      });
+      
+      icon.addEventListener('dragend', () => {
+        icon.classList.remove('dragging');
+        document.querySelectorAll('.app-icon').forEach(el => el.classList.remove('drag-over-top', 'drag-over-bottom'));
+      });
+      
+      icon.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        
+        const rect = icon.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        if (e.clientY < midY) {
+          icon.classList.add('drag-over-top');
+          icon.classList.remove('drag-over-bottom');
+        } else {
+          icon.classList.add('drag-over-bottom');
+          icon.classList.remove('drag-over-top');
+        }
+      });
+      
+      icon.addEventListener('dragleave', () => {
+        icon.classList.remove('drag-over-top', 'drag-over-bottom');
+      });
+      
+      icon.addEventListener('drop', (e) => {
+        e.preventDefault();
+        icon.classList.remove('drag-over-top', 'drag-over-bottom');
+        const fromIndex = parseInt(e.dataTransfer.getData('text/plain'), 10);
+        const toIndex = parseInt(icon.dataset.index, 10);
+        
+        if (fromIndex === toIndex || isNaN(fromIndex)) return;
+        
+        const rect = icon.getBoundingClientRect();
+        const midY = rect.top + rect.height / 2;
+        let insertIndex = toIndex;
+        if (e.clientY >= midY) {
+          insertIndex++;
+        }
+        
+        if (fromIndex < insertIndex) {
+          insertIndex--;
+        }
+
+        reorderPinnedSites(fromIndex, insertIndex);
+      });
+    });
+  }
+
+  function reorderPinnedSites(fromIndex, toIndex) {
+    chrome.storage.local.get(['pinnedSites'], (result) => {
+      let sites = result.pinnedSites || [];
+      const [movedSite] = sites.splice(fromIndex, 1);
+      sites.splice(toIndex, 0, movedSite);
+      chrome.storage.local.set({ pinnedSites: sites });
     });
   }
 
@@ -195,16 +355,40 @@ document.addEventListener('DOMContentLoaded', () => {
   settingsBtn.addEventListener('click', () => settingsModal.classList.remove('hidden'));
   closeSettings.addEventListener('click', () => settingsModal.classList.add('hidden'));
 
-  aiProviderSelect.addEventListener('change', (e) => {
-    const newVal = e.target.value;
+  function handleAiProviderChange(newVal) {
     currentAiProvider = newVal;
-    chrome.storage.local.set({ aiProvider: newVal });
+    chrome.storage.local.set({ aiProvider: newVal, aiProviderHasBeenSet: true });
     updateHomeIcon(newVal);
     
     if (homeAiIcon.classList.contains('active')) {
       loadUrl(newVal);
       setActiveIcon(newVal);
     }
+  }
+
+  aiProviderSelect.addEventListener('change', (e) => {
+    if (e.target.value === 'custom') {
+      customAiUrlInput.classList.remove('hidden');
+    } else {
+      customAiUrlInput.classList.add('hidden');
+      handleAiProviderChange(e.target.value);
+    }
+  });
+
+  customAiUrlInput.addEventListener('change', (e) => {
+    const val = e.target.value.trim();
+    if (val && (val.startsWith('http://') || val.startsWith('https://'))) {
+      handleAiProviderChange(val);
+    } else if (val) {
+      handleAiProviderChange('https://' + val);
+    }
+  });
+
+  searchProviderSelect.addEventListener('change', (e) => {
+    defaultSearchEngine = e.target.value;
+    chrome.storage.local.set({ defaultSearchEngine });
+    const searchIcon = document.getElementById('search-icon');
+    if (searchIcon) searchIcon.dataset.url = defaultSearchEngine;
   });
 
   for (const radio of appearanceRadios) {
@@ -212,6 +396,50 @@ document.addEventListener('DOMContentLoaded', () => {
       chrome.storage.local.set({ appearanceMode: e.target.value });
     });
   }
+
+  // App visibility checkboxes
+  ['search-icon', 'drop-icon', 'tools-icon'].forEach(appId => {
+    const cb = document.getElementById(`toggle-${appId}`);
+    if (cb) {
+      cb.addEventListener('change', (e) => {
+        window.toggleDefaultAppVisibility(appId, e.target.checked);
+      });
+    }
+  });
+
+  // Welcome Modals Logic
+  welcomeAiProvider.addEventListener('change', (e) => {
+    if (e.target.value === 'custom') {
+      welcomeCustomAi.classList.remove('hidden');
+    } else {
+      welcomeCustomAi.classList.add('hidden');
+    }
+  });
+
+  welcomeSaveBtn.addEventListener('click', () => {
+    let val = welcomeAiProvider.value;
+    if (val === 'custom') {
+      val = welcomeCustomAi.value.trim();
+      if (val && !val.startsWith('http')) val = 'https://' + val;
+      if (!val) val = 'https://copilot.microsoft.com/'; // fallback
+    }
+    
+    handleAiProviderChange(val);
+    welcomeModal.classList.add('hidden');
+  });
+
+  searchSaveBtn.addEventListener('click', () => {
+    defaultSearchEngine = welcomeSearchProvider.value;
+    chrome.storage.local.set({ defaultSearchEngine });
+    const searchIcon = document.getElementById('search-icon');
+    if (searchIcon) searchIcon.dataset.url = defaultSearchEngine;
+    
+    searchModal.classList.add('hidden');
+    
+    // Auto load it
+    setActiveIcon(defaultSearchEngine);
+    loadUrl(defaultSearchEngine);
+  });
 
   // Add/Remove Pin Logic
   addBtn.addEventListener('click', () => {
@@ -222,15 +450,20 @@ document.addEventListener('DOMContentLoaded', () => {
   closeAdd.addEventListener('click', () => addModal.classList.add('hidden'));
 
   function addPin(url, title = null) {
+    let finalUrl = url.trim();
+    if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+      finalUrl = 'https://' + finalUrl;
+    }
+    
     try {
-      new URL(url);
-      if(url.startsWith('chrome://')) { alert("Cannot pin internal Chrome pages."); return; }
-      const siteTitle = title || new URL(url).hostname;
+      new URL(finalUrl);
+      if(finalUrl.startsWith('chrome://')) { alert("Cannot pin internal Chrome pages."); return; }
+      const siteTitle = title || new URL(finalUrl).hostname;
       
       chrome.storage.local.get(['pinnedSites'], (result) => {
         let pinnedSites = result.pinnedSites || [];
-        if (!pinnedSites.find(s => s.url === url)) {
-          pinnedSites.push({ url, title: siteTitle });
+        if (!pinnedSites.find(s => s.url === finalUrl)) {
+          pinnedSites.push({ url: finalUrl, title: siteTitle });
           chrome.storage.local.set({ pinnedSites }, () => {
             addModal.classList.add('hidden');
           });
@@ -239,7 +472,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
     } catch (e) {
-      alert("Please enter a valid URL including http:// or https://");
+      alert("Please enter a valid URL.");
     }
   }
 
@@ -272,11 +505,50 @@ document.addEventListener('DOMContentLoaded', () => {
       splitDivider.classList.remove('hidden');
       secondaryFrame.src = currentAiProvider; 
       barSplit.style.color = 'var(--accent-color)';
+      // Reset flex sizes
+      primaryWorkspace.style.flex = '';
+      secondaryWorkspace.style.flex = '';
     } else {
       secondaryWorkspace.classList.add('hidden');
       splitDivider.classList.add('hidden');
       barSplit.style.color = '';
       secondaryFrame.src = 'about:blank'; // free memory
+      primaryWorkspace.style.flex = '';
+    }
+  });
+
+  // Split Screen Resizing Logic
+  let isDraggingSplit = false;
+
+  splitDivider.addEventListener('mousedown', (e) => {
+    isDraggingSplit = true;
+    document.body.style.cursor = 'ns-resize';
+    primaryWorkspace.style.pointerEvents = 'none';
+    secondaryWorkspace.style.pointerEvents = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDraggingSplit) return;
+    
+    const containerHeight = document.querySelector('.content-area').getBoundingClientRect().height;
+    const appBarHeight = appBar.classList.contains('hidden') ? 0 : appBar.getBoundingClientRect().height;
+    
+    let newHeight = e.clientY - appBarHeight;
+    
+    // Bounds checking
+    if (newHeight < 100) newHeight = 100;
+    if (newHeight > containerHeight - 100) newHeight = containerHeight - 100;
+    
+    primaryWorkspace.style.flex = `0 0 ${newHeight}px`;
+    secondaryWorkspace.style.flex = `1 1 0%`;
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isDraggingSplit) {
+      isDraggingSplit = false;
+      document.body.style.cursor = '';
+      primaryWorkspace.style.pointerEvents = '';
+      secondaryWorkspace.style.pointerEvents = '';
     }
   });
 
@@ -385,5 +657,17 @@ document.addEventListener('DOMContentLoaded', () => {
     // Just a placeholder since natively tearing down touch event listeners across an iframe is constrained.
     setTimeout(() => { barMenu.classList.add('hidden'); }, 300);
   });
+
+  // Badge API
+  window.setBadge = function(url, show) {
+    const icon = document.querySelector(`.app-icon[data-url="${url}"]`);
+    if (icon) {
+      if (show) {
+        icon.classList.add('has-badge');
+      } else {
+        icon.classList.remove('has-badge');
+      }
+    }
+  };
 
 });

@@ -495,3 +495,33 @@ iframe {
   background-color: var(--border-color);
   z-index: 0;
 }
+
+/* Drag and Drop Styling */
+.app-icon.dragging {
+  opacity: 0.5;
+}
+
+.app-icon.drag-over-top {
+  border-top: 2px solid var(--accent-color);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.app-icon.drag-over-bottom {
+  border-bottom: 2px solid var(--accent-color);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* Badge Styling */
+.app-icon.has-badge::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 8px;
+  height: 8px;
+  background-color: #e81123;
+  border-radius: 50%;
+  border: 2px solid var(--nav-bg);
+}
