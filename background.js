@@ -2,7 +2,11 @@ chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch((error) => console.error(error));
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === 'install') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
+  }
+  
   chrome.contextMenus.create({
     id: 'pin-to-sidebar',
     title: 'Pin to Sidebar',
