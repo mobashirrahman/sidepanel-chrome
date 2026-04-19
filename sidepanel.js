@@ -62,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const secondaryFrame = document.getElementById('secondary-frame');
 
   // Load Initial Settings
-  let currentAiProvider = 'https://copilot.microsoft.com/';
+  let currentAiProvider = 'https://chatgpt.com/';
   let defaultSearchEngine = '';
   let desktopSites = [];
   let hiddenDefaultApps = [];
@@ -421,7 +421,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (val === 'custom') {
       val = welcomeCustomAi.value.trim();
       if (val && !val.startsWith('http')) val = 'https://' + val;
-      if (!val) val = 'https://copilot.microsoft.com/'; // fallback
+      if (!val) val = 'https://chatgpt.com/'; // fallback
     }
     
     handleAiProviderChange(val);

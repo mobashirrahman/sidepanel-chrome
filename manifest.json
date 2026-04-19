@@ -3,6 +3,11 @@
   "version": "1.0",
   "description": "Your AI chat companion and multitasking sidebar.",
   "manifest_version": 3,
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
   "permissions": [
     "sidePanel",
     "storage",
@@ -30,6 +35,11 @@
     ]
   },
   "action": {
-    "default_title": "Open Sidebar"
+    "default_title": "Open Sidebar",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
   }
 }
