@@ -45,6 +45,16 @@ body, html {
   color: var(--text-color);
 }
 
+/* Thin global scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+*::-webkit-scrollbar { width: 4px; height: 4px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--subtext-color); }
+
 .container {
   display: flex;
   height: 100%;
@@ -54,7 +64,7 @@ body, html {
 
 /* Nav Strip Styling */
 .nav-strip {
-  width: 48px;
+  width: 40px;
   background-color: var(--nav-bg);
   border-left: 1px solid var(--border-color);
   display: flex;
@@ -74,12 +84,12 @@ body, html {
 }
 
 .app-icon, .action-icon {
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   display: flex;
   justify-content: center;
   align-items: center;
-  border-radius: 8px;
+  border-radius: 7px;
   color: var(--icon-color);
   cursor: pointer;
   transition: all 0.2s ease;
@@ -87,8 +97,8 @@ body, html {
 }
 
 .app-icon img {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 4px;
 }
 

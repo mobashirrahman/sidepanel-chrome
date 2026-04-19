@@ -811,9 +811,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   barClose.addEventListener('click', () => {
-    if (confirm(`Remove this pinned site permanently?`)) {
-      deletePin(currentViewUrl);
-    }
+    window.close();
   });
 
   // Dynamic DNR rules for Desktop View Mode
