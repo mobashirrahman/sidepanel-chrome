@@ -9,6 +9,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Load existing drops
   function loadDrops() {
     chrome.storage.local.get(['drops'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error loading drops:', chrome.runtime.lastError);
+        return;
+      }
+
       const drops = result.drops || [];
       if (drops.length > 0) {
         emptyState.style.display = 'none';
@@ -29,29 +34,35 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderDropItem(drop) {
     const div = document.createElement('div');
     div.className = 'drop-item';
-    
-    // Auto-link URLs
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    let contentHtml = '';
-    
+
     if (drop.type === 'image') {
-      contentHtml += `<img src="${drop.data}" alt="Dropped Image" />`;
+      const img = document.createElement('img');
+      img.src = drop.data;
+      img.alt = 'Dropped Image';
+      div.appendChild(img);
     } else if (drop.type === 'text') {
+      const urlRegex = /(https?:\/\/[^\s]+)/g;
       const escapedText = drop.data.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      contentHtml += escapedText.replace(urlRegex, '<a href="$1" target="_blank">$1</a>');
+      const textWithLinks = escapedText.replace(urlRegex, '<a href="$1" target="_blank">$1</a>');
+
+      const textDiv = document.createElement('div');
+      textDiv.innerHTML = textWithLinks;
+      div.appendChild(textDiv);
     }
 
     const date = new Date(drop.timestamp);
-    contentHtml += `<span class="timestamp">${date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>`;
-    
+    const timestamp = document.createElement('span');
+    timestamp.className = 'timestamp';
+    timestamp.textContent = date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    div.appendChild(timestamp);
+
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'delete-btn';
     deleteBtn.innerHTML = '&times;';
     deleteBtn.title = 'Delete';
     deleteBtn.onclick = () => deleteDrop(drop.id);
-    
-    div.innerHTML = contentHtml;
     div.appendChild(deleteBtn);
+
     historyContainer.appendChild(div);
   }
 
@@ -64,9 +75,18 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     chrome.storage.local.get(['drops'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error reading drops:', chrome.runtime.lastError);
+        return;
+      }
+
       const drops = result.drops || [];
       drops.push(drop);
       chrome.storage.local.set({ drops }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Error saving drop:', chrome.runtime.lastError);
+          return;
+        }
         loadDrops();
         // Clear input
         textInput.value = '';
@@ -77,9 +97,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function deleteDrop(id) {
     chrome.storage.local.get(['drops'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error reading drops:', chrome.runtime.lastError);
+        return;
+      }
+
       let drops = result.drops || [];
       drops = drops.filter(d => d.id !== id);
       chrome.storage.local.set({ drops }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Error saving drops:', chrome.runtime.lastError);
+          return;
+        }
         loadDrops();
       });
     });

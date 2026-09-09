@@ -6,11 +6,13 @@ chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
     chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
   }
-  
-  chrome.contextMenus.create({
-    id: 'pin-to-sidebar',
-    title: 'Pin to Sidebar',
-    contexts: ['page']
+
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: 'pin-to-sidebar',
+      title: 'Pin to Sidebar',
+      contexts: ['page']
+    });
   });
 });
 
