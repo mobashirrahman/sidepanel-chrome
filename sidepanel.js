@@ -72,6 +72,11 @@ document.addEventListener('DOMContentLoaded', () => {
   let isSplitView = false;
   
   chrome.storage.local.get(['aiProvider', 'aiProviderHasBeenSet', 'defaultSearchEngine', 'appearanceMode', 'desktopSites', 'hiddenDefaultApps'], (result) => {
+    if (chrome.runtime.lastError) {
+      console.error('Error loading settings:', chrome.runtime.lastError);
+      return;
+    }
+
     if (!result.aiProviderHasBeenSet) {
       welcomeModal.classList.remove('hidden');
     }
@@ -328,6 +333,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderPinnedSites() {
     chrome.storage.local.get(['pinnedSites'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error loading pinned sites:', chrome.runtime.lastError);
+        return;
+      }
+
       let sites = result.pinnedSites;
       if (!sites) {
         sites = [
@@ -335,7 +345,11 @@ document.addEventListener('DOMContentLoaded', () => {
           { url: 'https://claude.ai/', title: 'Claude' },
           { url: 'https://gemini.google.com/', title: 'Gemini' }
         ];
-        chrome.storage.local.set({ pinnedSites: sites });
+        chrome.storage.local.set({ pinnedSites: sites }, () => {
+          if (chrome.runtime.lastError) {
+            console.error('Error saving pinned sites:', chrome.runtime.lastError);
+          }
+        });
       }
       
       pinnedContainer.innerHTML = '';
@@ -418,10 +432,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function reorderPinnedSites(fromIndex, toIndex) {
     chrome.storage.local.get(['pinnedSites'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error reading pinned sites:', chrome.runtime.lastError);
+        return;
+      }
+
       let sites = result.pinnedSites || [];
       const [movedSite] = sites.splice(fromIndex, 1);
       sites.splice(toIndex, 0, movedSite);
-      chrome.storage.local.set({ pinnedSites: sites });
+      chrome.storage.local.set({ pinnedSites: sites }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Error reordering pinned sites:', chrome.runtime.lastError);
+        }
+      });
     });
   }
 
@@ -439,7 +462,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function handleAiProviderChange(newVal) {
     currentAiProvider = newVal;
-    chrome.storage.local.set({ aiProvider: newVal, aiProviderHasBeenSet: true });
+    chrome.storage.local.set({ aiProvider: newVal, aiProviderHasBeenSet: true }, () => {
+      if (chrome.runtime.lastError) {
+        console.error('Error saving AI provider:', chrome.runtime.lastError);
+      }
+    });
     updateHomeIcon(newVal);
     // Always keep the AI frame warm with the new provider
     aiFrame.src = newVal;
@@ -468,14 +495,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
   searchProviderSelect.addEventListener('change', (e) => {
     defaultSearchEngine = e.target.value;
-    chrome.storage.local.set({ defaultSearchEngine });
+    chrome.storage.local.set({ defaultSearchEngine }, () => {
+      if (chrome.runtime.lastError) {
+        console.error('Error saving search provider:', chrome.runtime.lastError);
+      }
+    });
     const searchIcon = document.getElementById('search-icon');
     if (searchIcon) searchIcon.dataset.url = defaultSearchEngine;
   });
 
   for (const radio of appearanceRadios) {
     radio.addEventListener('change', (e) => {
-      chrome.storage.local.set({ appearanceMode: e.target.value });
+      chrome.storage.local.set({ appearanceMode: e.target.value }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Error saving appearance mode:', chrome.runtime.lastError);
+        }
+      });
     });
   }
 
@@ -539,10 +574,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const siteTitle = title || new URL(finalUrl).hostname;
       
       chrome.storage.local.get(['pinnedSites'], (result) => {
+        if (chrome.runtime.lastError) {
+          console.error('Error reading pinned sites:', chrome.runtime.lastError);
+          return;
+        }
+
         let pinnedSites = result.pinnedSites || [];
         if (!pinnedSites.find(s => s.url === finalUrl)) {
           pinnedSites.push({ url: finalUrl, title: siteTitle });
           chrome.storage.local.set({ pinnedSites }, () => {
+            if (chrome.runtime.lastError) {
+              console.error('Error saving pinned site:', chrome.runtime.lastError);
+              return;
+            }
             if (closeAfter) pinPicker.classList.add('hidden');
             refreshPinPickerState();
           });
@@ -557,9 +601,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function deletePin(url) {
     chrome.storage.local.get(['pinnedSites'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error reading pinned sites:', chrome.runtime.lastError);
+        return;
+      }
+
       let pinnedSites = result.pinnedSites || [];
       pinnedSites = pinnedSites.filter(s => s.url !== url);
       chrome.storage.local.set({ pinnedSites }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Error deleting pinned site:', chrome.runtime.lastError);
+          return;
+        }
         renderPinnedSites();
         if (currentViewUrl === url) {
           loadUrl(currentAiProvider);
@@ -866,6 +919,10 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       
       chrome.storage.local.set({ desktopSites }, () => {
+        if (chrome.runtime.lastError) {
+          console.error('Error saving desktop sites:', chrome.runtime.lastError);
+          return;
+        }
         updateDesktopModeRulsets(hostname, desktopToggle.checked);
         // Force reload from cache
         const cached = iframeCache.get(currentViewUrl);
