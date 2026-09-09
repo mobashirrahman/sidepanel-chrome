@@ -71,63 +71,95 @@ document.addEventListener('DOMContentLoaded', () => {
   let hiddenDefaultApps = [];
   let isSplitView = false;
   
-  chrome.storage.local.get(['aiProvider', 'aiProviderHasBeenSet', 'defaultSearchEngine', 'appearanceMode', 'desktopSites', 'hiddenDefaultApps'], (result) => {
-    if (chrome.runtime.lastError) {
-      console.error('Error loading settings:', chrome.runtime.lastError);
-      return;
-    }
-
-    if (!result.aiProviderHasBeenSet) {
-      welcomeModal.classList.remove('hidden');
-    }
-
-    if (result.aiProvider) {
-      currentAiProvider = result.aiProvider;
-      
-      // Check if it's a known provider or custom
-      const options = Array.from(aiProviderSelect.options).map(o => o.value);
-      if (!options.includes(currentAiProvider) && currentAiProvider !== 'custom') {
-        aiProviderSelect.value = 'custom';
-        customAiUrlInput.value = currentAiProvider;
-        customAiUrlInput.classList.remove('hidden');
-      } else {
-        aiProviderSelect.value = currentAiProvider;
+  // One-time migration: older versions stored settings in storage.local, which
+  // doesn't sync across devices. If sync has no settings yet but local does,
+  // copy them over so existing users don't lose their setup.
+  const LEGACY_SETTINGS_KEYS = ['aiProvider', 'aiProviderHasBeenSet', 'defaultSearchEngine', 'appearanceMode', 'desktopSites', 'hiddenDefaultApps', 'pinnedSites'];
+  function migrateLocalSettingsToSync(callback) {
+    chrome.storage.sync.get(['aiProviderHasBeenSet'], (syncResult) => {
+      if (chrome.runtime.lastError || syncResult.aiProviderHasBeenSet) {
+        callback();
+        return;
       }
-    }
 
-    if (result.defaultSearchEngine) {
-      defaultSearchEngine = result.defaultSearchEngine;
-      searchProviderSelect.value = defaultSearchEngine;
-      // Update search icon URL
-      const searchIcon = document.getElementById('search-icon');
-      if (searchIcon) searchIcon.dataset.url = defaultSearchEngine;
-    }
-    
-    if (result.appearanceMode) {
-      for (const radio of appearanceRadios) {
-        if (radio.value === result.appearanceMode) radio.checked = true;
-      }
-    }
+      chrome.storage.local.get(LEGACY_SETTINGS_KEYS, (localResult) => {
+        if (chrome.runtime.lastError || !localResult.aiProviderHasBeenSet) {
+          callback();
+          return;
+        }
 
-    if (result.desktopSites) {
-      desktopSites = result.desktopSites;
-    }
-
-    if (result.hiddenDefaultApps) {
-      hiddenDefaultApps = result.hiddenDefaultApps;
-      hiddenDefaultApps.forEach(appId => {
-        const el = document.getElementById(appId);
-        if (el) el.style.display = 'none';
+        chrome.storage.sync.set(localResult, () => {
+          if (chrome.runtime.lastError) {
+            console.error('Error migrating settings to sync:', chrome.runtime.lastError);
+          }
+          callback();
+        });
       });
-    }
+    });
+  }
 
-    updateHomeIcon(currentAiProvider);
-    // Pre-load the AI iframe immediately so it's ready before user clicks
-    aiFrame.src = currentAiProvider;
-    currentViewUrl = currentAiProvider;
-    // Show AI frame by default
-    aiFrame.style.zIndex = '2';
-    setActiveIcon(currentAiProvider);
+  migrateLocalSettingsToSync(() => {
+    chrome.storage.sync.get(['aiProvider', 'aiProviderHasBeenSet', 'defaultSearchEngine', 'appearanceMode', 'desktopSites', 'hiddenDefaultApps'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error loading settings:', chrome.runtime.lastError);
+        return;
+      }
+
+      if (!result.aiProviderHasBeenSet) {
+        welcomeModal.classList.remove('hidden');
+      }
+
+      if (result.aiProvider) {
+        currentAiProvider = result.aiProvider;
+
+        // Check if it's a known provider or custom
+        const options = Array.from(aiProviderSelect.options).map(o => o.value);
+        if (!options.includes(currentAiProvider) && currentAiProvider !== 'custom') {
+          aiProviderSelect.value = 'custom';
+          customAiUrlInput.value = currentAiProvider;
+          customAiUrlInput.classList.remove('hidden');
+        } else {
+          aiProviderSelect.value = currentAiProvider;
+        }
+      }
+
+      if (result.defaultSearchEngine) {
+        defaultSearchEngine = result.defaultSearchEngine;
+        searchProviderSelect.value = defaultSearchEngine;
+        // Update search icon URL
+        const searchIcon = document.getElementById('search-icon');
+        if (searchIcon) searchIcon.dataset.url = defaultSearchEngine;
+      }
+
+      if (result.appearanceMode) {
+        for (const radio of appearanceRadios) {
+          if (radio.value === result.appearanceMode) radio.checked = true;
+        }
+      }
+
+      if (result.desktopSites) {
+        desktopSites = result.desktopSites;
+      }
+
+      if (result.hiddenDefaultApps) {
+        hiddenDefaultApps = result.hiddenDefaultApps;
+        hiddenDefaultApps.forEach(appId => {
+          const el = document.getElementById(appId);
+          if (el) el.style.display = 'none';
+        });
+      }
+
+      updateHomeIcon(currentAiProvider);
+      // Pre-load the AI iframe immediately so it's ready before user clicks
+      aiFrame.src = currentAiProvider;
+      currentViewUrl = currentAiProvider;
+      // Show AI frame by default
+      aiFrame.style.zIndex = '2';
+      setActiveIcon(currentAiProvider);
+      // Render pinned sites only after migration/settings load completes, so we
+      // don't race the migration write with the default-seed read.
+      renderPinnedSites();
+    });
   });
 
   // Default App Visibility Toggle Logic
@@ -143,8 +175,12 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!hiddenDefaultApps.includes(appId)) hiddenDefaultApps.push(appId);
     }
     
-    chrome.storage.local.set({ hiddenDefaultApps });
-    
+    chrome.storage.sync.set({ hiddenDefaultApps }, () => {
+      if (chrome.runtime.lastError) {
+        console.error('Error saving hidden apps:', chrome.runtime.lastError);
+      }
+    });
+
     // Update settings checkbox if it exists
     const cb = document.getElementById(`toggle-${appId}`);
     if (cb) cb.checked = show;
@@ -332,7 +368,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderPinnedSites() {
-    chrome.storage.local.get(['pinnedSites'], (result) => {
+    chrome.storage.sync.get(['pinnedSites'], (result) => {
       if (chrome.runtime.lastError) {
         console.error('Error loading pinned sites:', chrome.runtime.lastError);
         return;
@@ -345,7 +381,7 @@ document.addEventListener('DOMContentLoaded', () => {
           { url: 'https://claude.ai/', title: 'Claude' },
           { url: 'https://gemini.google.com/', title: 'Gemini' }
         ];
-        chrome.storage.local.set({ pinnedSites: sites }, () => {
+        chrome.storage.sync.set({ pinnedSites: sites }, () => {
           if (chrome.runtime.lastError) {
             console.error('Error saving pinned sites:', chrome.runtime.lastError);
           }
@@ -431,7 +467,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function reorderPinnedSites(fromIndex, toIndex) {
-    chrome.storage.local.get(['pinnedSites'], (result) => {
+    chrome.storage.sync.get(['pinnedSites'], (result) => {
       if (chrome.runtime.lastError) {
         console.error('Error reading pinned sites:', chrome.runtime.lastError);
         return;
@@ -440,7 +476,7 @@ document.addEventListener('DOMContentLoaded', () => {
       let sites = result.pinnedSites || [];
       const [movedSite] = sites.splice(fromIndex, 1);
       sites.splice(toIndex, 0, movedSite);
-      chrome.storage.local.set({ pinnedSites: sites }, () => {
+      chrome.storage.sync.set({ pinnedSites: sites }, () => {
         if (chrome.runtime.lastError) {
           console.error('Error reordering pinned sites:', chrome.runtime.lastError);
         }
@@ -448,10 +484,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  setTimeout(() => renderPinnedSites(), 100);
-
   chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (namespace === 'local' && changes.pinnedSites) {
+    if (namespace === 'sync' && changes.pinnedSites) {
       renderPinnedSites();
     }
   });
@@ -462,7 +496,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function handleAiProviderChange(newVal) {
     currentAiProvider = newVal;
-    chrome.storage.local.set({ aiProvider: newVal, aiProviderHasBeenSet: true }, () => {
+    chrome.storage.sync.set({ aiProvider: newVal, aiProviderHasBeenSet: true }, () => {
       if (chrome.runtime.lastError) {
         console.error('Error saving AI provider:', chrome.runtime.lastError);
       }
@@ -495,7 +529,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   searchProviderSelect.addEventListener('change', (e) => {
     defaultSearchEngine = e.target.value;
-    chrome.storage.local.set({ defaultSearchEngine }, () => {
+    chrome.storage.sync.set({ defaultSearchEngine }, () => {
       if (chrome.runtime.lastError) {
         console.error('Error saving search provider:', chrome.runtime.lastError);
       }
@@ -506,7 +540,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   for (const radio of appearanceRadios) {
     radio.addEventListener('change', (e) => {
-      chrome.storage.local.set({ appearanceMode: e.target.value }, () => {
+      chrome.storage.sync.set({ appearanceMode: e.target.value }, () => {
         if (chrome.runtime.lastError) {
           console.error('Error saving appearance mode:', chrome.runtime.lastError);
         }
@@ -547,7 +581,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   searchSaveBtn.addEventListener('click', () => {
     defaultSearchEngine = welcomeSearchProvider.value;
-    chrome.storage.local.set({ defaultSearchEngine });
+    chrome.storage.sync.set({ defaultSearchEngine }, () => {
+      if (chrome.runtime.lastError) {
+        console.error('Error saving search provider:', chrome.runtime.lastError);
+      }
+    });
     const searchIcon = document.getElementById('search-icon');
     if (searchIcon) searchIcon.dataset.url = defaultSearchEngine;
     
@@ -573,7 +611,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if(finalUrl.startsWith('chrome://')) { alert("Cannot pin internal Chrome pages."); return; }
       const siteTitle = title || new URL(finalUrl).hostname;
       
-      chrome.storage.local.get(['pinnedSites'], (result) => {
+      chrome.storage.sync.get(['pinnedSites'], (result) => {
         if (chrome.runtime.lastError) {
           console.error('Error reading pinned sites:', chrome.runtime.lastError);
           return;
@@ -582,7 +620,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let pinnedSites = result.pinnedSites || [];
         if (!pinnedSites.find(s => s.url === finalUrl)) {
           pinnedSites.push({ url: finalUrl, title: siteTitle });
-          chrome.storage.local.set({ pinnedSites }, () => {
+          chrome.storage.sync.set({ pinnedSites }, () => {
             if (chrome.runtime.lastError) {
               console.error('Error saving pinned site:', chrome.runtime.lastError);
               return;
@@ -600,7 +638,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function deletePin(url) {
-    chrome.storage.local.get(['pinnedSites'], (result) => {
+    chrome.storage.sync.get(['pinnedSites'], (result) => {
       if (chrome.runtime.lastError) {
         console.error('Error reading pinned sites:', chrome.runtime.lastError);
         return;
@@ -608,7 +646,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       let pinnedSites = result.pinnedSites || [];
       pinnedSites = pinnedSites.filter(s => s.url !== url);
-      chrome.storage.local.set({ pinnedSites }, () => {
+      chrome.storage.sync.set({ pinnedSites }, () => {
         if (chrome.runtime.lastError) {
           console.error('Error deleting pinned site:', chrome.runtime.lastError);
           return;
@@ -695,7 +733,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderPinPickerLists() {
-    chrome.storage.local.get(['pinnedSites'], (result) => {
+    chrome.storage.sync.get(['pinnedSites'], (result) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error reading pinned sites:', chrome.runtime.lastError);
+        return;
+      }
       const pinned = (result.pinnedSites || []).map(s => s.url);
       const query = pinPickerSearch.value.trim().toLowerCase();
 
@@ -918,7 +960,7 @@ document.addEventListener('DOMContentLoaded', () => {
         desktopSites = desktopSites.filter(h => h !== hostname);
       }
       
-      chrome.storage.local.set({ desktopSites }, () => {
+      chrome.storage.sync.set({ desktopSites }, () => {
         if (chrome.runtime.lastError) {
           console.error('Error saving desktop sites:', chrome.runtime.lastError);
           return;

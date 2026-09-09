@@ -58,6 +58,62 @@ body, html {
 .header p {
   font-size: 12px;
   color: var(--subtext-color);
+  margin-bottom: 10px;
+}
+
+.search-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--subtext-color);
+  pointer-events: none;
+}
+
+#drop-search {
+  width: 100%;
+  background-color: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  padding: 7px 30px;
+  font-size: 12px;
+  color: var(--text-color);
+  font-family: inherit;
+  outline: none;
+}
+
+#drop-search:focus {
+  border-color: var(--accent-color);
+}
+
+#clear-search-btn {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  color: var(--subtext-color);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#clear-search-btn:hover {
+  color: var(--text-color);
+}
+
+.no-results {
+  text-align: center;
+  color: var(--subtext-color);
+  font-size: 13px;
+  padding: 24px 0;
 }
 
 .drop-history {

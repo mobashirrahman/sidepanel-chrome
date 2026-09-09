@@ -5,6 +5,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const fileInput = document.getElementById('file-input');
   const historyContainer = document.getElementById('drop-history');
   const emptyState = document.getElementById('empty-state');
+  const noResults = document.getElementById('no-results');
+  const searchInput = document.getElementById('drop-search');
+  const clearSearchBtn = document.getElementById('clear-search-btn');
+
+  let allDrops = [];
+  let searchQuery = '';
 
   // Load existing drops
   function loadDrops() {
@@ -14,21 +20,45 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      const drops = result.drops || [];
-      if (drops.length > 0) {
-        emptyState.style.display = 'none';
-      } else {
-        emptyState.style.display = 'flex';
-      }
-
-      // Clear current elements (except empty state)
-      Array.from(historyContainer.children).forEach(child => {
-        if (child.id !== 'empty-state') child.remove();
-      });
-
-      drops.forEach(drop => renderDropItem(drop));
-      historyContainer.scrollTop = historyContainer.scrollHeight;
+      allDrops = result.drops || [];
+      renderDrops();
     });
+  }
+
+  function renderDrops() {
+    const query = searchQuery.trim().toLowerCase();
+    const visibleDrops = query
+      ? allDrops.filter(drop => matchesSearch(drop, query))
+      : allDrops;
+
+    // Clear current elements (except empty/no-results states)
+    Array.from(historyContainer.children).forEach(child => {
+      if (child.id !== 'empty-state' && child.id !== 'no-results') child.remove();
+    });
+
+    if (allDrops.length === 0) {
+      emptyState.style.display = 'flex';
+      noResults.classList.add('hidden');
+    } else if (query && visibleDrops.length === 0) {
+      emptyState.style.display = 'none';
+      noResults.classList.remove('hidden');
+    } else {
+      emptyState.style.display = 'none';
+      noResults.classList.add('hidden');
+    }
+
+    visibleDrops.forEach(drop => renderDropItem(drop));
+    historyContainer.scrollTop = historyContainer.scrollHeight;
+  }
+
+  function matchesSearch(drop, query) {
+    if (drop.type === 'text') {
+      return drop.data.toLowerCase().includes(query);
+    }
+    if (drop.type === 'image') {
+      return 'image'.includes(query);
+    }
+    return false;
   }
 
   function renderDropItem(drop) {
@@ -184,12 +214,27 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  searchInput.addEventListener('input', (e) => {
+    searchQuery = e.target.value;
+    clearSearchBtn.classList.toggle('hidden', searchQuery.length === 0);
+    renderDrops();
+  });
+
+  clearSearchBtn.addEventListener('click', () => {
+    searchQuery = '';
+    searchInput.value = '';
+    clearSearchBtn.classList.add('hidden');
+    searchInput.focus();
+    renderDrops();
+  });
+
   loadDrops();
 
   // Listen for storage changes from other contexts (like if main extension window adds something)
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'local' && changes.drops) {
-      loadDrops();
+      allDrops = changes.drops.newValue || [];
+      renderDrops();
     }
   });
 });
