@@ -4,5 +4,10 @@ playwright-report/
 blob-report/
 .playwright/
 
+# Release artifacts: the .pem signs the extension identity and must stay
+# private (back it up outside the repo); .crx ships via GitHub Releases.
+*.pem
+*.crx
+
 # Chrome generates indexed DNR rulesets here for packed extensions
 _metadata/
