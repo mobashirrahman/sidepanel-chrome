@@ -2,6 +2,10 @@ chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch((error) => console.error(error));
 
+// The Drop feature was removed; its storage key has no reader left.
+// Removing a missing key is a no-op, so this is safe on every service worker wake.
+chrome.storage.local.remove('drops').catch((error) => console.error(error));
+
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
     chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });

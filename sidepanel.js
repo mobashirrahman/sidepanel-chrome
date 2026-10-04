@@ -2,6 +2,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const iframe = document.getElementById('main-frame');
   const loading = document.getElementById('loading');
   const pinnedContainer = document.getElementById('pinned-sites-container');
+  const contentArea = document.querySelector('.content-area');
   
   // Modals
   const settingsModal = document.getElementById('settings-modal');
@@ -41,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // App Bar Elements
   const appBar = document.getElementById('app-bar');
+  const appGlyph = document.getElementById('app-glyph');
   const appTitle = document.getElementById('app-title');
   const appUrl = document.getElementById('app-url');
   const barSplit = document.getElementById('bar-split');
@@ -63,6 +65,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const secondaryFrame = document.getElementById('secondary-frame');
   const aiFrame = document.getElementById('ai-frame');
 
+  // A missing favicon must not leave a broken-image glyph in the header
+  if (appGlyph) {
+    appGlyph.addEventListener('error', () => { appGlyph.style.visibility = 'hidden'; });
+  }
+
   // Load Initial Settings
   let currentAiProvider = 'https://chatgpt.com/';
   let currentViewUrl = 'https://chatgpt.com/'; // tracks the currently visible URL
@@ -70,6 +77,13 @@ document.addEventListener('DOMContentLoaded', () => {
   let desktopSites = [];
   let hiddenDefaultApps = [];
   let isSplitView = false;
+
+  // Scope the framing-header rules to the frames this panel creates.
+  // Fallbacks cover first run, before the welcome flow stores anything.
+  globalThis.SidekickFrameRules?.install({
+    aiProvider: currentAiProvider,
+    defaultSearchEngine,
+  });
   
   chrome.storage.local.get(['aiProvider', 'aiProviderHasBeenSet', 'defaultSearchEngine', 'appearanceMode', 'desktopSites', 'hiddenDefaultApps'], (result) => {
     if (chrome.runtime.lastError) {
@@ -114,10 +128,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     if (result.hiddenDefaultApps) {
-      hiddenDefaultApps = result.hiddenDefaultApps;
+      // Drop ids whose icons no longer exist so storage doesn't grow stale entries
+      const live = result.hiddenDefaultApps.filter(appId => document.getElementById(appId));
+      if (live.length !== result.hiddenDefaultApps.length) {
+        chrome.storage.local.set({ hiddenDefaultApps: live });
+      }
+      hiddenDefaultApps = live;
       hiddenDefaultApps.forEach(appId => {
-        const el = document.getElementById(appId);
-        if (el) el.style.display = 'none';
+        document.getElementById(appId).style.display = 'none';
       });
     }
 
@@ -150,8 +168,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (cb) cb.checked = show;
   };
 
-  // LRU iframe cache pool — preserves last 3 visited pinned sites
-  const CACHE_LIMIT = 3;
+  // LRU iframe cache pool — preserves the last 2 visited pinned sites.
+  // Each entry is a full cross-origin site in its own renderer process, so this
+  // number is the main RAM dial. Raise it only if in-page state matters more.
+  const CACHE_LIMIT = 2;
   const iframeCache = new Map(); // url -> iframe element (ordered by recency)
   const iframeContainer = document.querySelector('.iframe-container');
 
@@ -173,9 +193,24 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Create a new cached iframe
+    // Sandbox everything except top navigation: a framed site (e.g. a bot
+    // challenge page) must never be able to navigate the panel itself away.
+    // All other capabilities are preserved so embedded apps keep working.
     const frame = document.createElement('iframe');
     frame.frameBorder = '0';
     frame.allow = 'clipboard-read; clipboard-write; microphone; camera;';
+    frame.setAttribute('sandbox', [
+      'allow-scripts',
+      'allow-same-origin',
+      'allow-forms',
+      'allow-modals',
+      'allow-popups',
+      'allow-popups-to-escape-sandbox',
+      'allow-downloads',
+      'allow-pointer-lock',
+      'allow-orientation-lock',
+      'allow-presentation',
+    ].join(' '));
     frame.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;';
     frame.addEventListener('load', () => loading.classList.add('hidden'));
     iframeContainer.appendChild(frame);
@@ -185,6 +220,42 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function hideAllCachedFrames() {
     iframeCache.forEach(frame => { frame.style.zIndex = '1'; });
+  }
+
+  // Instagram's client app fails its initial route resolution inside cross-site
+  // embeds and parks on its error route, but a subsequent same-document
+  // navigation re-invokes the client router, which then resolves home
+  // correctly. Verified end to end: hard load lands on "Page not found", then
+  // a fragment step (no document reload) fetches PolarisHomeRoot and renders
+  // home; pinning the fragment directly does not work, it must arrive second.
+  const IG_NUDGE_DELAY_MS = 4000;
+  const IG_NUDGE_FRAGMENT = '#sidekick-home';
+
+  function isInstagramUrl(url) {
+    try {
+      const host = new URL(url).hostname;
+      return host === 'instagram.com' || host.endsWith('.instagram.com');
+    } catch {
+      return false;
+    }
+  }
+
+  // Exposed for tests; the hostname check must not match lookalikes.
+  window.SidekickInstagramNudge = { isInstagramUrl };
+
+  function scheduleInstagramNudge(frame) {
+    frame.addEventListener('load', () => {
+      setTimeout(() => {
+        try {
+          // Same-document navigation only: no document reload, so this can
+          // only wake the client router, never restart the boot that failed.
+          // Bail if anything already moved the frame along.
+          const current = new URL(frame.src);
+          if (current.hash) return;
+          frame.src = current.toString() + IG_NUDGE_FRAGMENT;
+        } catch {}
+      }, IG_NUDGE_DELAY_MS);
+    }, { once: true });
   }
 
   function loadUrl(url) {
@@ -199,31 +270,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Push AI frame to back
     aiFrame.style.zIndex = '1';
 
-    // Local extension pages don't need caching
-    if (url.startsWith('local:')) {
-      hideAllCachedFrames();
-      loading.classList.remove('hidden');
-      // Reuse a single local frame (no point caching extension pages)
-      let localFrame = iframeCache.get('__local__');
-      if (!localFrame) {
-        localFrame = document.createElement('iframe');
-        localFrame.frameBorder = '0';
-        localFrame.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;z-index:2;';
-        localFrame.addEventListener('load', () => loading.classList.add('hidden'));
-        iframeContainer.appendChild(localFrame);
-        iframeCache.set('__local__', localFrame);
-      }
-      localFrame.src = chrome.runtime.getURL(url.replace('local:', ''));
-      localFrame.style.zIndex = '2';
-      return;
-    }
-
     // Use LRU cache for regular pinned sites
     hideAllCachedFrames();
     const { frame, isNew } = getOrCreateCachedFrame(url);
     if (isNew) {
       loading.classList.remove('hidden');
       frame.src = url;
+      // Fresh Instagram frames need the post-boot nudge (see above). Cached
+      // frames are deliberately left alone: the user may have navigated in-app
+      // and must not be yanked back home.
+      if (isInstagramUrl(url)) scheduleInstagramNudge(frame);
     }
     frame.style.zIndex = '2';
   }
@@ -232,7 +288,8 @@ document.addEventListener('DOMContentLoaded', () => {
     homeAiIcon.dataset.url = url;
     try {
       const hostname = new URL(url).hostname;
-      homeAiIcon.title = hostname;
+      homeAiIcon.dataset.tip = hostname;
+      homeAiIcon.setAttribute('aria-label', hostname);
     } catch {}
 
     if (url === 'https://copilot.microsoft.com/') {
@@ -242,18 +299,14 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       homeAiSvg.style.display = 'none';
       homeAiImg.style.display = 'block';
-      homeAiImg.src = `https://www.google.com/s2/favicons?sz=64&domain_url=${encodeURIComponent(url)}`;
+      homeAiImg.src = faviconUrl(url);
     }
   }
 
   function getSiteTitle(url) {
     // try to find title from pinned list
     const el = document.querySelector(`.app-icon[data-url="${url}"]`);
-    if (el && el.title) return el.title;
-    if (url.startsWith('local:')) {
-      const page = url.replace('local:', '').replace('.html', '');
-      return page.charAt(0).toUpperCase() + page.slice(1);
-    }
+    if (el && el.dataset.tip) return el.dataset.tip;
     try { return new URL(url).hostname; } catch { return url; }
   }
 
@@ -283,17 +336,55 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       appBar.classList.remove('hidden');
       appTitle.textContent = getSiteTitle(url);
-      appUrl.textContent = url.startsWith('local:') ? 'Extension App' : url;
-      
+      appUrl.textContent = url;
+      // Glyph shows the site's real favicon so the header reads at a glance
+      appGlyph.style.visibility = 'visible';
+      appGlyph.src = faviconUrl(url);
+
       // Update toggles based on settings
       try {
-        if (!url.startsWith('local:')) {
-          const hostname = new URL(url).hostname;
-          desktopToggle.checked = desktopSites.includes(hostname);
-        }
+        const hostname = new URL(url).hostname;
+        desktopToggle.checked = desktopSites.includes(hostname);
       } catch {}
     }
   }
+
+  // In-panel confirm. Native confirm() is not wired up in every host's side
+  // panel surface, where it silently returns false and the action just dies.
+  const confirmModal = document.getElementById('confirm-modal');
+  const confirmMessage = document.getElementById('confirm-message');
+  const confirmOk = document.getElementById('confirm-ok');
+  const confirmCancel = document.getElementById('confirm-cancel');
+  let confirmResolve = null;
+
+  function showConfirm(message, okLabel = 'Remove') {
+    return new Promise((resolve) => {
+      confirmResolve?.(false); // settle any stale prompt
+      confirmResolve = resolve;
+      confirmMessage.textContent = message;
+      confirmOk.textContent = okLabel;
+      confirmModal.classList.remove('hidden');
+    });
+  }
+
+  function settleConfirm(value) {
+    if (!confirmResolve) return;
+    const resolve = confirmResolve;
+    confirmResolve = null;
+    confirmModal.classList.add('hidden');
+    resolve(value);
+  }
+
+  confirmOk.addEventListener('click', () => settleConfirm(true));
+  confirmCancel.addEventListener('click', () => settleConfirm(false));
+  confirmModal.addEventListener('click', (e) => {
+    if (e.target === confirmModal) settleConfirm(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !confirmModal.classList.contains('hidden')) {
+      settleConfirm(false);
+    }
+  });
 
   function bindIconEvents() {
     document.querySelectorAll('.app-icon').forEach(icon => {
@@ -313,23 +404,27 @@ document.addEventListener('DOMContentLoaded', () => {
         loadUrl(targetUrl);
       };
       
-      icon.oncontextmenu = (e) => {
+      icon.oncontextmenu = async (e) => {
         e.preventDefault();
         const targetUrl = icon.dataset.url;
-        
+
         if (icon.classList.contains('default-app') || icon.id === 'home-ai-icon') {
-          if (confirm(`Hide ${icon.title || 'this app'} from sidebar? You can re-enable it in Settings.`)) {
-            window.toggleDefaultAppVisibility(icon.id, false);
-          }
+          const hide = await showConfirm(
+            `Hide ${icon.dataset.tip || icon.getAttribute('aria-label') || 'this app'} from sidebar? You can re-enable it in Settings.`,
+            'Hide'
+          );
+          if (hide) window.toggleDefaultAppVisibility(icon.id, false);
           return;
         }
-        
-        if (confirm(`Remove this pinned site?`)) {
+
+        if (await showConfirm('Remove this pinned site?')) {
           deletePin(targetUrl);
         }
       };
     });
   }
+
+  let lastRenderedPinnedSignature = null;
 
   function renderPinnedSites() {
     chrome.storage.local.get(['pinnedSites'], (result) => {
@@ -340,10 +435,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
       let sites = result.pinnedSites;
       if (!sites) {
+        // translate.google.com serves a hard 403 to cross-site embeds and
+        // claude.ai answers with a Cloudflare bot challenge, so neither can be
+        // a working default pin. These three were verified to embed cleanly.
         sites = [
-          { url: 'https://translate.google.com/', title: 'Google Translate' },
-          { url: 'https://claude.ai/', title: 'Claude' },
-          { url: 'https://gemini.google.com/', title: 'Gemini' }
+          { url: 'https://gemini.google.com/', title: 'Gemini' },
+          { url: 'https://www.bing.com/translator', title: 'Bing Translator' },
+          { url: 'https://github.com/', title: 'GitHub' }
         ];
         chrome.storage.local.set({ pinnedSites: sites }, () => {
           if (chrome.runtime.lastError) {
@@ -351,19 +449,28 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         });
       }
-      
+
+      // Every write to pinnedSites fires onChanged, and most callers also render
+      // explicitly, so without this guard the strip is torn down and rebuilt
+      // several times per interaction.
+      const signature = JSON.stringify(sites);
+      if (signature === lastRenderedPinnedSignature) return;
+      lastRenderedPinnedSignature = signature;
+
       pinnedContainer.innerHTML = '';
       sites.forEach((site, index) => {
         const div = document.createElement('div');
         div.className = 'app-icon';
         div.dataset.url = site.url;
         div.dataset.index = index;
-        div.title = site.title;
+        div.dataset.tip = site.title;
+        div.setAttribute('aria-label', site.title);
         div.draggable = true;
-        
+
         const img = document.createElement('img');
-        img.src = `https://www.google.com/s2/favicons?sz=64&domain_url=${encodeURIComponent(site.url)}`;
-        
+        img.src = faviconUrl(site.url);
+        img.alt = '';
+
         div.appendChild(img);
         pinnedContainer.appendChild(div);
       });
@@ -448,13 +555,66 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  chrome.storage.local.get(['pinnedSites'], (result) => {
+    if (!chrome.runtime.lastError) refreshPinnedUrlSet(result.pinnedSites);
+  });
+
   setTimeout(() => renderPinnedSites(), 100);
 
   chrome.storage.onChanged.addListener((changes, namespace) => {
     if (namespace === 'local' && changes.pinnedSites) {
+      refreshPinnedUrlSet(changes.pinnedSites.newValue);
       renderPinnedSites();
+      refreshPinPickerState();
     }
   });
+
+  // Shared rail tooltip. It renders at strip level (not inside the button)
+  // because the pinned-sites container scrolls and would clip a CSS-only tip.
+  // Text comes from data-tip so dynamic icons need no extra DOM.
+  const navStrip = document.querySelector('.nav-strip');
+  const railTip = document.getElementById('rail-tip');
+  let railTipTimer = null;
+
+  function hideRailTip() {
+    if (railTipTimer) {
+      clearTimeout(railTipTimer);
+      railTipTimer = null;
+    }
+    if (railTip) railTip.classList.add('hidden');
+  }
+
+  if (navStrip && railTip) {
+    navStrip.addEventListener('mouseover', (e) => {
+      const btn = e.target.closest('.app-icon, .action-icon');
+      const label = btn && (btn.dataset.tip || btn.getAttribute('aria-label'));
+      if (!label) {
+        hideRailTip();
+        return;
+      }
+      if (railTipTimer) clearTimeout(railTipTimer);
+      railTipTimer = setTimeout(() => {
+        railTipTimer = null;
+        const stripRect = navStrip.getBoundingClientRect();
+        const btnRect = btn.getBoundingClientRect();
+        railTip.textContent = label;
+        railTip.style.top = `${btnRect.top + btnRect.height / 2 - stripRect.top}px`;
+        railTip.classList.remove('hidden');
+      }, 350);
+    });
+
+    navStrip.addEventListener('mouseout', (e) => {
+      const from = e.target.closest('.app-icon, .action-icon');
+      const to = e.relatedTarget && e.relatedTarget.closest
+        ? e.relatedTarget.closest('.app-icon, .action-icon')
+        : null;
+      if (from && from !== to) hideRailTip();
+    });
+
+    // Scrolling or clicking invalidates the anchor position
+    pinnedContainer.addEventListener('scroll', hideRailTip, { passive: true });
+    navStrip.addEventListener('click', hideRailTip);
+  }
 
   // Settings Logic
   settingsBtn.addEventListener('click', () => settingsModal.classList.remove('hidden'));
@@ -515,7 +675,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // App visibility checkboxes
-  ['search-icon', 'drop-icon', 'tools-icon'].forEach(appId => {
+  ['search-icon'].forEach(appId => {
     const cb = document.getElementById(`toggle-${appId}`);
     if (cb) {
       cb.addEventListener('change', (e) => {
@@ -642,11 +802,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const CURATED_SITES = [
     // Quick Access (also appears in discover)
     { name: 'ChatGPT',         url: 'https://chatgpt.com/',              cat: 'ai',          desc: 'Leading AI chat assistant',           quickAccess: true },
-    { name: 'Reddit',          url: 'https://www.reddit.com/',           cat: 'social',      desc: 'The front page of the internet',       quickAccess: true },
-    { name: 'Gmail',           url: 'https://mail.google.com/',          cat: 'productivity',desc: 'Google email service',                 quickAccess: true },
-    { name: 'Google Translate',url: 'https://translate.google.com/',     cat: 'tools',       desc: 'Translate text and websites',          quickAccess: true },
     { name: 'Google',          url: 'https://www.google.com/',           cat: 'tools',       desc: 'Search the web',                       quickAccess: true },
-    { name: 'Google Drive',    url: 'https://drive.google.com/',         cat: 'productivity',desc: 'Store and share files in the cloud',    quickAccess: true },
     { name: 'Facebook',        url: 'https://www.facebook.com/',         cat: 'social',      desc: 'Connect with friends and family',       quickAccess: true },
     { name: 'DeepL',           url: 'https://www.deepl.com/',            cat: 'tools',       desc: 'Accurate AI-powered translations',      quickAccess: true },
     // Discover list
@@ -655,7 +811,12 @@ document.addEventListener('DOMContentLoaded', () => {
     { name: 'Perplexity',      url: 'https://www.perplexity.ai/',        cat: 'ai',          desc: 'AI-powered search engine' },
     { name: 'DeepSeek',        url: 'https://chat.deepseek.com/',        cat: 'ai',          desc: 'Open-source AI assistant' },
     { name: 'Grok',            url: 'https://grok.com/',                 cat: 'ai',          desc: 'AI assistant by xAI' },
-    { name: 'WhatsApp',        url: 'https://web.whatsapp.com/',         cat: 'social',      desc: 'Quickly send and receive messages' },
+    { name: 'Mistral',         url: 'https://chat.mistral.ai/',          cat: 'ai',          desc: 'Mistral AI chat assistant' },
+    { name: 'Meta AI',         url: 'https://www.meta.ai/',              cat: 'ai',          desc: 'Meta AI assistant' },
+    { name: 'HuggingChat',     url: 'https://huggingface.co/chat/',      cat: 'ai',          desc: 'Open-source AI chat' },
+    { name: 'Duck.ai',         url: 'https://duck.ai/',                  cat: 'ai',          desc: 'Private AI chat by DuckDuckGo' },
+    { name: 'Poe',             url: 'https://poe.com/',                  cat: 'ai',          desc: 'Multi-model AI chat' },
+    { name: 'Qwen',            url: 'https://chat.qwen.ai/',           cat: 'ai',          desc: 'Qwen AI chat assistant' },
     { name: 'Instagram',       url: 'https://www.instagram.com/',        cat: 'social',      desc: 'Connect with friends, share moments' },
     { name: 'Twitter / X',     url: 'https://x.com/',                    cat: 'social',      desc: 'Join the conversation' },
     { name: 'LinkedIn',        url: 'https://www.linkedin.com/',         cat: 'social',      desc: 'Professional networking' },
@@ -666,10 +827,9 @@ document.addEventListener('DOMContentLoaded', () => {
     { name: 'Spotify',         url: 'https://open.spotify.com/',         cat: 'music',       desc: 'Stream music and podcasts' },
     { name: 'SoundCloud',      url: 'https://soundcloud.com/',           cat: 'music',       desc: 'Discover and share music' },
     { name: 'Amazon',          url: 'https://www.amazon.com/',           cat: 'shopping',    desc: 'Shop millions of products' },
-    { name: 'Etsy',            url: 'https://www.etsy.com/',             cat: 'shopping',    desc: 'Unique handmade and vintage items' },
     { name: 'Hacker News',     url: 'https://news.ycombinator.com/',     cat: 'news',        desc: 'Tech news and discussion' },
     { name: 'BBC News',        url: 'https://www.bbc.com/news',          cat: 'news',        desc: 'World news coverage' },
-    { name: 'Notion',          url: 'https://www.notion.so/',            cat: 'productivity',desc: 'All-in-one workspace' },
+    { name: 'Notion',          url: 'https://www.notion.com/',           cat: 'productivity',desc: 'All-in-one workspace' },
     { name: 'GitHub',          url: 'https://github.com/',               cat: 'productivity',desc: 'Build and ship software' },
     { name: 'Trello',          url: 'https://trello.com/',               cat: 'productivity',desc: 'Visual project management' },
     { name: 'Figma',           url: 'https://www.figma.com/',            cat: 'productivity',desc: 'Collaborative design tool' },
@@ -680,8 +840,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let currentPinPickerCat = 'all';
 
+  // Pinned URLs as a Set, kept fresh by the storage listener below, so rendering
+  // the picker needs no storage round trip and membership tests are O(1).
+  let pinnedUrlSet = new Set();
+  let pinnedRevision = 0;
+  let lastPickerSignature = null;
+  let pinSearchTimer = null;
+
+  function refreshPinnedUrlSet(pinnedSites) {
+    pinnedUrlSet = new Set((pinnedSites || []).map((s) => s.url));
+    pinnedRevision++;
+  }
+
+  // Chrome's local favicon cache. No network request, so nothing leaks to a
+  // third party and the nav strip paints without waiting on a round trip.
   function faviconUrl(url) {
-    return `https://www.google.com/s2/favicons?sz=64&domain_url=${encodeURIComponent(url)}`;
+    const fav = new URL(chrome.runtime.getURL('/_favicon/'));
+    fav.searchParams.set('pageUrl', url);
+    fav.searchParams.set('size', '32');
+    return fav.toString();
   }
 
   function openPinPicker() {
@@ -695,61 +872,67 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderPinPickerLists() {
-    chrome.storage.local.get(['pinnedSites'], (result) => {
-      const pinned = (result.pinnedSites || []).map(s => s.url);
-      const query = pinPickerSearch.value.trim().toLowerCase();
+    const query = pinPickerSearch.value.trim().toLowerCase();
 
-      // Quick Access Grid
-      const qaGrid = document.getElementById('quick-access-grid');
-      const qaItems = CURATED_SITES.filter(s => s.quickAccess);
-      qaGrid.innerHTML = '';
-      qaItems.forEach(site => {
-        if (query && !site.name.toLowerCase().includes(query) && !site.url.toLowerCase().includes(query)) return;
-        const isPinned = pinned.includes(site.url);
-        const btn = document.createElement('button');
-        btn.className = 'qa-item' + (isPinned ? ' already-pinned' : '');
-        btn.title = isPinned ? 'Already pinned' : `Pin ${site.name}`;
-        btn.innerHTML = `
-          <div class="qa-icon-wrap">
-            <img src="${faviconUrl(site.url)}" alt="">
-          </div>
-          <span class="qa-label">${site.name}</span>`;
-        btn.addEventListener('click', () => {
-          if (!isPinned) addPin(site.url, site.name, false);
-        });
-        qaGrid.appendChild(btn);
-      });
+    // Rebuilding ~40 nodes with a favicon each on every keystroke is wasteful.
+    // Bail out when the visible result set cannot have changed.
+    const signature = `${currentPinPickerCat}|${query}|${pinnedRevision}`;
+    if (signature === lastPickerSignature) return;
+    lastPickerSignature = signature;
 
-      // Show/hide quick access section
-      document.getElementById('quick-access-section').style.display = qaGrid.children.length === 0 ? 'none' : '';
+    const isPinned = (url) => pinnedUrlSet.has(url);
 
-      // Discover List
-      const discoverList = document.getElementById('discover-list');
-      const discoverItems = CURATED_SITES.filter(s => !s.quickAccess);
-      discoverList.innerHTML = '';
-      discoverItems.forEach(site => {
-        const matchesCat = currentPinPickerCat === 'all' || site.cat === currentPinPickerCat;
-        const matchesQuery = !query || site.name.toLowerCase().includes(query) || site.url.toLowerCase().includes(query);
-        if (!matchesCat || !matchesQuery) return;
-        const isPinned = pinned.includes(site.url);
-        const item = document.createElement('div');
-        item.className = 'discover-item';
-        item.innerHTML = `
-          <div class="discover-icon"><img src="${faviconUrl(site.url)}" alt=""></div>
-          <div class="discover-info">
-            <div class="discover-name">${site.name}</div>
-            <div class="discover-desc">${site.desc}</div>
-          </div>
-          <button class="discover-pin-btn ${isPinned ? 'pinned' : ''}" title="${isPinned ? 'Already pinned' : 'Pin'}">${isPinned ? '✓' : '+'}</button>`;
+    // Quick Access Grid
+    const qaGrid = document.getElementById('quick-access-grid');
+    const qaItems = CURATED_SITES.filter((s) => s.quickAccess);
+    qaGrid.innerHTML = '';
+    qaItems.forEach((site) => {
+      if (query && !site.name.toLowerCase().includes(query) && !site.url.toLowerCase().includes(query)) return;
+      const pinned = isPinned(site.url);
+      const btn = document.createElement('button');
+      btn.className = 'qa-item' + (pinned ? ' already-pinned' : '');
+      btn.title = pinned ? 'Already pinned' : `Pin ${site.name}`;
+      btn.innerHTML = `
+        <div class="qa-icon-wrap">
+          <img src="${faviconUrl(site.url)}" alt="">
+        </div>
+        <span class="qa-label">${site.name}</span>`;
+      if (!pinned) {
+        btn.addEventListener('click', () => addPin(site.url, site.name, false));
+      }
+      qaGrid.appendChild(btn);
+    });
+
+    // Show/hide quick access section
+    document.getElementById('quick-access-section').style.display = qaGrid.children.length === 0 ? 'none' : '';
+
+    // Discover List
+    const discoverList = document.getElementById('discover-list');
+    const discoverItems = CURATED_SITES.filter((s) => !s.quickAccess);
+    discoverList.innerHTML = '';
+    discoverItems.forEach((site) => {
+      const matchesCat = currentPinPickerCat === 'all' || site.cat === currentPinPickerCat;
+      const matchesQuery = !query || site.name.toLowerCase().includes(query) || site.url.toLowerCase().includes(query);
+      if (!matchesCat || !matchesQuery) return;
+      const pinned = isPinned(site.url);
+      const item = document.createElement('div');
+      item.className = 'discover-item';
+      item.innerHTML = `
+        <div class="discover-icon"><img src="${faviconUrl(site.url)}" alt=""></div>
+        <div class="discover-info">
+          <div class="discover-name">${site.name}</div>
+          <div class="discover-desc">${site.desc}</div>
+        </div>
+        <button class="discover-pin-btn ${pinned ? 'pinned' : ''}" title="${pinned ? 'Already pinned' : 'Pin'}">${pinned ? '✓' : '+'}</button>`;
+      if (!pinned) {
+        const pin = () => addPin(site.url, site.name, false);
         item.querySelector('.discover-pin-btn').addEventListener('click', (e) => {
           e.stopPropagation();
-          if (!isPinned) addPin(site.url, site.name, false);
+          pin();
         });
-        item.addEventListener('click', () => {
-          if (!isPinned) addPin(site.url, site.name, false);
-        });
-        discoverList.appendChild(item);
-      });
+        item.addEventListener('click', pin);
+      }
+      discoverList.appendChild(item);
     });
   }
 
@@ -770,7 +953,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Search input
-  pinPickerSearch.addEventListener('input', () => renderPinPickerLists());
+  pinPickerSearch.addEventListener('input', () => {
+    // Debounce: each keystroke used to cost a storage read plus a full rebuild
+    // of both lists.
+    clearTimeout(pinSearchTimer);
+    pinSearchTimer = setTimeout(renderPinPickerLists, 120);
+  });
 
   // App Bar Actions & Logic
   barSplit.addEventListener('click', () => {
@@ -794,33 +982,54 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Split Screen Resizing Logic
   let isDraggingSplit = false;
+  let splitDragMetrics = null;
+  let splitFramePending = false;
 
   splitDivider.addEventListener('mousedown', (e) => {
     isDraggingSplit = true;
     document.body.style.cursor = 'ns-resize';
     primaryWorkspace.style.pointerEvents = 'none';
     secondaryWorkspace.style.pointerEvents = 'none';
+
+    // Measure once per drag. Calling getBoundingClientRect() inside mousemove
+    // forces a synchronous layout on every pointer event, and the style writes
+    // below invalidate layout again immediately after.
+    splitDragMetrics = {
+      containerHeight: contentArea.getBoundingClientRect().height,
+      appBarHeight: appBar.classList.contains('hidden') ? 0 : appBar.getBoundingClientRect().height,
+    };
   });
 
   document.addEventListener('mousemove', (e) => {
     if (!isDraggingSplit) return;
-    
-    const containerHeight = document.querySelector('.content-area').getBoundingClientRect().height;
-    const appBarHeight = appBar.classList.contains('hidden') ? 0 : appBar.getBoundingClientRect().height;
-    
-    let newHeight = e.clientY - appBarHeight;
-    
-    // Bounds checking
-    if (newHeight < 100) newHeight = 100;
-    if (newHeight > containerHeight - 100) newHeight = containerHeight - 100;
-    
-    primaryWorkspace.style.flex = `0 0 ${newHeight}px`;
-    secondaryWorkspace.style.flex = `1 1 0%`;
+
+    // Coalesce bursts of pointer events into one style write per frame.
+    if (splitFramePending) return;
+    splitFramePending = true;
+    const clientY = e.clientY;
+
+    requestAnimationFrame(() => {
+      splitFramePending = false;
+      if (!splitDragMetrics) return;
+
+      let newHeight = clientY - splitDragMetrics.appBarHeight;
+
+      // Bounds checking
+      if (newHeight < 100) newHeight = 100;
+      const maxHeight = splitDragMetrics.containerHeight - 100;
+      if (newHeight > maxHeight) newHeight = maxHeight;
+
+      primaryWorkspace.style.flex = `0 0 ${newHeight}px`;
+      secondaryWorkspace.style.flex = '1 1 0%';
+    });
   });
 
   document.addEventListener('mouseup', () => {
     if (isDraggingSplit) {
       isDraggingSplit = false;
+      // Do NOT clear splitDragMetrics here: a coalesced frame may still be
+      // pending, and it carries the final pointer position. It is always
+      // reassigned on the next mousedown.
       document.body.style.cursor = '';
       primaryWorkspace.style.pointerEvents = '';
       secondaryWorkspace.style.pointerEvents = '';

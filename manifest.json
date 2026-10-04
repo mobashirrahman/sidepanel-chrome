@@ -11,6 +11,7 @@
   "permissions": [
     "sidePanel",
     "storage",
+    "favicon",
     "declarativeNetRequest",
     "declarativeNetRequestWithHostAccess",
     "contextMenus",
@@ -24,15 +25,6 @@
   },
   "side_panel": {
     "default_path": "sidepanel.html"
-  },
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "ruleset_1",
-        "enabled": true,
-        "path": "rules.json"
-      }
-    ]
   },
   "action": {
     "default_title": "Open Sidebar",
