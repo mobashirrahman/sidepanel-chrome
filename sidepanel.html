@@ -36,6 +36,7 @@
             <div id="bar-menu" class="bar-dropdown hidden">
               <div class="bar-menu-item" id="menu-refresh">Refresh</div>
               <div class="bar-menu-item" id="menu-copy">Copy link</div>
+              <div class="bar-menu-item" id="menu-summarize">Summarize page with AI</div>
               <div class="divider"></div>
               <div class="bar-menu-item" id="menu-desktop">
                 <span>Show desktop view</span>
@@ -64,9 +65,9 @@
       <div id="primary-workspace" class="workspace">
         <div class="iframe-container" style="position:relative;">
           <!-- Always-alive AI iframe, pre-loaded on open -->
-          <iframe id="ai-frame" src="about:blank" frameborder="0" allow="clipboard-read; clipboard-write; microphone; camera;" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock allow-orientation-lock allow-presentation" style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;"></iframe>
+          <iframe id="ai-frame" src="about:blank" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture; fullscreen; clipboard-read; clipboard-write; microphone; camera;" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock allow-orientation-lock allow-presentation" style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:1;"></iframe>
           <!-- Regular content iframe for pinned sites/apps -->
-          <iframe id="main-frame" src="about:blank" frameborder="0" allow="clipboard-read; clipboard-write; microphone; camera;" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock allow-orientation-lock allow-presentation" style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:2;"></iframe>
+          <iframe id="main-frame" src="about:blank" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture; fullscreen; clipboard-read; clipboard-write; microphone; camera;" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock allow-orientation-lock allow-presentation" style="position:absolute;top:0;left:0;width:100%;height:100%;z-index:2;"></iframe>
           <!-- Optional loading overlay -->
           <div id="loading" class="hidden">
             <div class="spinner"></div>
@@ -80,7 +81,7 @@
       <!-- Secondary Workspace (Locked to Home AI Provider) -->
       <div id="secondary-workspace" class="workspace hidden">
         <div class="iframe-container">
-          <iframe id="secondary-frame" src="about:blank" frameborder="0" allow="clipboard-read; clipboard-write; microphone; camera;" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock allow-orientation-lock allow-presentation"></iframe>
+          <iframe id="secondary-frame" src="about:blank" frameborder="0" allow="autoplay; encrypted-media; picture-in-picture; fullscreen; clipboard-read; clipboard-write; microphone; camera;" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads allow-pointer-lock allow-orientation-lock allow-presentation"></iframe>
         </div>
       </div>
     </div>
@@ -118,6 +119,7 @@
       </div>
       <div class="rail-tip hidden" id="rail-tip"></div>
     </div>
+    <div id="toast" class="toast hidden"></div>
   </div>
 
   <!-- Confirm Modal (in-panel; native confirm() is unreliable in some hosts) -->
@@ -185,6 +187,20 @@
             <option value="https://www.bing.com/search?q=">Bing</option>
             <option value="https://duckduckgo.com/?q=">DuckDuckGo</option>
           </select>
+        </div>
+
+        <div class="settings-section">
+          <h3>Workspaces</h3>
+          <select id="workspace-select" class="dropdown"></select>
+          <div class="custom-url-row" style="margin-top: 8px;">
+            <input type="text" id="workspace-name" placeholder="New workspace name" class="pin-picker-url-input">
+            <button id="workspace-add" class="pin-url-btn">Add</button>
+          </div>
+          <div class="modal-actions" style="margin-top: 8px;">
+            <button id="workspace-rename" class="secondary-btn">Rename to above</button>
+            <button id="workspace-delete" class="secondary-btn">Delete</button>
+          </div>
+          <p class="subtext" style="margin-top: 8px;">Pins sync across devices where you're signed in.</p>
         </div>
 
         <div class="settings-section">
@@ -302,6 +318,7 @@
   </div>
 
   <script src="frame-rules.js"></script>
+  <script src="workspaces.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

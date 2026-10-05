@@ -51,6 +51,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const barMenu = document.getElementById('bar-menu');
   const menuRefresh = document.getElementById('menu-refresh');
   const menuCopy = document.getElementById('menu-copy');
+  const menuSummarize = document.getElementById('menu-summarize');
   const menuDesktopBtn = document.getElementById('menu-desktop');
   const desktopToggle = document.getElementById('desktop-toggle');
   const menuTouchBtn = document.getElementById('menu-touch');
@@ -84,6 +85,10 @@ document.addEventListener('DOMContentLoaded', () => {
     aiProvider: currentAiProvider,
     defaultSearchEngine,
   });
+
+  // Migrate legacy pinnedSites into a workspace (or adopt newer synced state)
+  // before the first rail render below.
+  globalThis.SidekickWorkspaces?.ensureState(() => {});
   
   chrome.storage.local.get(['aiProvider', 'aiProviderHasBeenSet', 'defaultSearchEngine', 'appearanceMode', 'desktopSites', 'hiddenDefaultApps'], (result) => {
     if (chrome.runtime.lastError) {
@@ -175,6 +180,32 @@ document.addEventListener('DOMContentLoaded', () => {
   const iframeCache = new Map(); // url -> iframe element (ordered by recency)
   const iframeContainer = document.querySelector('.iframe-container');
 
+  // Hosts where tearing down the frame kills background audio/video. Eviction
+  // prefers the oldest non-media frame so e.g. YouTube keeps playing while the
+  // user flips through other pins. Only when every cached frame is media does
+  // it fall back to plain LRU.
+  const MEDIA_HOSTS = [
+    'youtube.com',
+    'youtu.be',
+    'music.youtube.com',
+    'open.spotify.com',
+    'soundcloud.com',
+    'twitch.tv',
+    'netflix.com',
+  ];
+
+  function isMediaUrl(url) {
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      return MEDIA_HOSTS.some((h) => host === h || host.endsWith('.' + h));
+    } catch {
+      return false;
+    }
+  }
+
+  // Exposed for tests; the hostname check must not match lookalikes.
+  window.SidekickMedia = { isMediaUrl };
+
   function getOrCreateCachedFrame(url) {
     if (iframeCache.has(url)) {
       // Move to end (most recently used)
@@ -184,12 +215,20 @@ document.addEventListener('DOMContentLoaded', () => {
       return { frame, isNew: false };
     }
 
-    // Evict least recently used if at limit
+    // Evict least recently used if at limit, sparing media first so
+    // background playback survives site switches.
     if (iframeCache.size >= CACHE_LIMIT) {
-      const oldestUrl = iframeCache.keys().next().value;
-      const oldestFrame = iframeCache.get(oldestUrl);
+      let evictUrl = null;
+      for (const cachedUrl of iframeCache.keys()) {
+        if (!isMediaUrl(cachedUrl)) {
+          evictUrl = cachedUrl;
+          break;
+        }
+      }
+      if (!evictUrl) evictUrl = iframeCache.keys().next().value;
+      const oldestFrame = iframeCache.get(evictUrl);
       oldestFrame.remove();
-      iframeCache.delete(oldestUrl);
+      iframeCache.delete(evictUrl);
     }
 
     // Create a new cached iframe
@@ -198,7 +237,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // All other capabilities are preserved so embedded apps keep working.
     const frame = document.createElement('iframe');
     frame.frameBorder = '0';
-    frame.allow = 'clipboard-read; clipboard-write; microphone; camera;';
+    frame.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen; clipboard-read; clipboard-write; microphone; camera;';
     frame.setAttribute('sandbox', [
       'allow-scripts',
       'allow-same-origin',
@@ -349,6 +388,50 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  // Keyboard-shortcut navigation (manifest commands -> background -> here).
+  // Cycles the rail in DOM order, skipping the search icon when no engine is
+  // configured since that would only open the setup modal.
+  function cyclePin(direction) {
+    const icons = Array.from(document.querySelectorAll('.nav-top .app-icon'));
+    if (!icons.length) return;
+    let idx = icons.findIndex((el) => el.dataset.url && el.dataset.url === currentViewUrl);
+    for (let step = 0; step < icons.length; step++) {
+      idx = (idx + direction + icons.length) % icons.length;
+      const el = icons[idx];
+      if (el.id === 'search-icon' && !defaultSearchEngine) continue;
+      el.click();
+      return;
+    }
+  }
+
+  function dispatchPanelCommand(msg) {
+    if (!msg) return;
+    if (msg.type === 'sidekick-cycle') {
+      cyclePin(msg.direction || 1);
+    } else if (msg.type === 'sidekick-home') {
+      setActiveIcon(currentAiProvider);
+      loadUrl(currentAiProvider);
+    }
+  }
+
+  chrome.runtime.onMessage.addListener((msg) => dispatchPanelCommand(msg));
+
+  // A shortcut fired while the panel was closed has no live receiver, so the
+  // background stashes it. Drain it once the rail is bound (guarded: later
+  // renders are signature-skipped anyway, but the flag makes it explicit).
+  let panelCommandDrained = false;
+  function drainPendingPanelCommand() {
+    if (panelCommandDrained) return;
+    panelCommandDrained = true;
+    chrome.storage.local.get(['pendingPanelCommand'], (result) => {
+      if (chrome.runtime.lastError) return;
+      const cmd = result.pendingPanelCommand;
+      if (!cmd) return;
+      chrome.storage.local.remove('pendingPanelCommand');
+      dispatchPanelCommand(cmd);
+    });
+  }
+
   // In-panel confirm. Native confirm() is not wired up in every host's side
   // panel surface, where it silently returns false and the action just dies.
   const confirmModal = document.getElementById('confirm-modal');
@@ -477,6 +560,7 @@ document.addEventListener('DOMContentLoaded', () => {
       bindIconEvents();
       bindDragEvents();
       setActiveIcon(currentViewUrl);
+      drainPendingPanelCommand();
     });
   }
 
@@ -544,10 +628,11 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      let sites = result.pinnedSites || [];
+      const sites = (result.pinnedSites || []).slice();
       const [movedSite] = sites.splice(fromIndex, 1);
+      if (!movedSite) return;
       sites.splice(toIndex, 0, movedSite);
-      chrome.storage.local.set({ pinnedSites: sites }, () => {
+      globalThis.SidekickWorkspaces.setActiveSites(sites, () => {
         if (chrome.runtime.lastError) {
           console.error('Error reordering pinned sites:', chrome.runtime.lastError);
         }
@@ -559,6 +644,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!chrome.runtime.lastError) refreshPinnedUrlSet(result.pinnedSites);
   });
 
+  // Handoff that landed while the panel was closed (background opened us).
+  chrome.storage.local.get(['aiHandoff'], (result) => {
+    if (!chrome.runtime.lastError && result.aiHandoff) consumeAiHandoff(result.aiHandoff);
+  });
+
   setTimeout(() => renderPinnedSites(), 100);
 
   chrome.storage.onChanged.addListener((changes, namespace) => {
@@ -566,6 +656,15 @@ document.addEventListener('DOMContentLoaded', () => {
       refreshPinnedUrlSet(changes.pinnedSites.newValue);
       renderPinnedSites();
       refreshPinPickerState();
+    }
+    // Another device (or this panel) touched workspaces: keep the Settings
+    // select truthful. Pinned-site changes already re-render above.
+    if (namespace === 'local' && globalThis.SidekickWorkspaces.WS_KEYS.some((k) => changes[k])) {
+      refreshWorkspaceSelect();
+    }
+    // Context-menu handoff from the background while the panel is open.
+    if (namespace === 'local' && changes.aiHandoff && changes.aiHandoff.newValue) {
+      consumeAiHandoff(changes.aiHandoff.newValue);
     }
   });
 
@@ -684,6 +783,64 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Workspaces UI (Settings modal). The rail always renders pinnedSites, so
+  // switching workspaces only needs to swap the mirror; the storage listener
+  // above re-renders.
+  const workspaceSelect = document.getElementById('workspace-select');
+  const workspaceNameInput = document.getElementById('workspace-name');
+
+  function refreshWorkspaceSelect() {
+    if (!workspaceSelect) return;
+    globalThis.SidekickWorkspaces.ensureState((state) => {
+      workspaceSelect.innerHTML = '';
+      state.workspaces.forEach((ws) => {
+        const count = (state.workspaceSites[ws.id] || []).length;
+        const opt = document.createElement('option');
+        opt.value = ws.id;
+        opt.textContent = `${ws.name} (${count})`;
+        workspaceSelect.appendChild(opt);
+      });
+      workspaceSelect.value = state.activeWorkspaceId;
+    });
+  }
+
+  if (workspaceSelect) {
+    refreshWorkspaceSelect();
+    settingsBtn.addEventListener('click', refreshWorkspaceSelect);
+
+    workspaceSelect.addEventListener('change', () => {
+      globalThis.SidekickWorkspaces.switchWorkspace(workspaceSelect.value, () => {
+        refreshWorkspaceSelect();
+      });
+    });
+
+    document.getElementById('workspace-add').addEventListener('click', () => {
+      const name = workspaceNameInput.value.trim();
+      globalThis.SidekickWorkspaces.createWorkspace(name, () => {
+        workspaceNameInput.value = '';
+        refreshWorkspaceSelect();
+      });
+    });
+
+    document.getElementById('workspace-rename').addEventListener('click', () => {
+      const name = workspaceNameInput.value.trim();
+      if (!name) return;
+      globalThis.SidekickWorkspaces.renameWorkspace(workspaceSelect.value, name, () => {
+        workspaceNameInput.value = '';
+        refreshWorkspaceSelect();
+      });
+    });
+
+    document.getElementById('workspace-delete').addEventListener('click', async () => {
+      const label = workspaceSelect.selectedOptions[0]?.textContent || 'this workspace';
+      if (await showConfirm(`Delete ${label}? Its pins will be removed from this device.`)) {
+        globalThis.SidekickWorkspaces.deleteWorkspace(workspaceSelect.value, () => {
+          refreshWorkspaceSelect();
+        });
+      }
+    });
+  }
+
   // Welcome Modals Logic
   welcomeAiProvider.addEventListener('change', (e) => {
     if (e.target.value === 'custom') {
@@ -727,32 +884,25 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
       finalUrl = 'https://' + finalUrl;
     }
-    
+
     try {
       new URL(finalUrl);
       if(finalUrl.startsWith('chrome://')) { alert("Cannot pin internal Chrome pages."); return; }
       const siteTitle = title || new URL(finalUrl).hostname;
-      
-      chrome.storage.local.get(['pinnedSites'], (result) => {
+
+      // Pins live in the active workspace; pinnedSites is mirrored by the
+      // workspaces module so the rail, frame rules and picker stay in sync.
+      globalThis.SidekickWorkspaces.addPin(finalUrl, siteTitle, (state, added) => {
         if (chrome.runtime.lastError) {
-          console.error('Error reading pinned sites:', chrome.runtime.lastError);
+          console.error('Error saving pinned site:', chrome.runtime.lastError);
           return;
         }
-
-        let pinnedSites = result.pinnedSites || [];
-        if (!pinnedSites.find(s => s.url === finalUrl)) {
-          pinnedSites.push({ url: finalUrl, title: siteTitle });
-          chrome.storage.local.set({ pinnedSites }, () => {
-            if (chrome.runtime.lastError) {
-              console.error('Error saving pinned site:', chrome.runtime.lastError);
-              return;
-            }
-            if (closeAfter) pinPicker.classList.add('hidden');
-            refreshPinPickerState();
-          });
-        } else {
+        if (!added) {
           if (closeAfter) alert("This site is already pinned!");
+          return;
         }
+        if (closeAfter) pinPicker.classList.add('hidden');
+        refreshPinPickerState();
       });
     } catch (e) {
       alert("Please enter a valid URL.");
@@ -760,15 +910,17 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function deletePin(url) {
+    // Mutations derive from raw pinnedSites (the rail's render source) and
+    // write back through the active workspace, so a direct external write is
+    // respected instead of being clobbered by a stale workspace mirror.
     chrome.storage.local.get(['pinnedSites'], (result) => {
       if (chrome.runtime.lastError) {
         console.error('Error reading pinned sites:', chrome.runtime.lastError);
         return;
       }
 
-      let pinnedSites = result.pinnedSites || [];
-      pinnedSites = pinnedSites.filter(s => s.url !== url);
-      chrome.storage.local.set({ pinnedSites }, () => {
+      const sites = (result.pinnedSites || []).filter(s => s.url !== url);
+      globalThis.SidekickWorkspaces.setActiveSites(sites, () => {
         if (chrome.runtime.lastError) {
           console.error('Error deleting pinned site:', chrome.runtime.lastError);
           return;
@@ -1066,6 +1218,70 @@ document.addEventListener('DOMContentLoaded', () => {
       setTimeout(() => { menuCopy.textContent = originalText; barMenu.classList.add('hidden'); }, 1000);
     });
   });
+
+  // AI handoff: the background (context menus) or the bar menu below stashes
+  // a prompt built from the active tab. The panel consumes it by focusing the
+  // AI provider and copying the prompt, since clipboard writes from a service
+  // worker are unreliable and AI iframes are cross-origin (no direct inject).
+  const toast = document.getElementById('toast');
+  let toastTimer = null;
+
+  function showToast(msg, ms = 3500) {
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.classList.remove('hidden');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.add('hidden'), ms);
+  }
+
+  // Self-contained for chrome.scripting: no closures or outside references.
+  function extractPageText() {
+    const bodyText = (document.body && document.body.innerText) || '';
+    return { text: bodyText.slice(0, 6000), title: document.title, url: location.href };
+  }
+
+  function consumeAiHandoff(handoff) {
+    if (!handoff || !handoff.prompt) return;
+    chrome.storage.local.remove('aiHandoff');
+    setActiveIcon(currentAiProvider);
+    loadUrl(currentAiProvider);
+    navigator.clipboard.writeText(handoff.prompt).then(
+      () => showToast('Prompt copied — paste it into the AI chat.'),
+      () => showToast('AI ready — copy failed, please copy manually.')
+    );
+  }
+
+  if (menuSummarize) {
+    menuSummarize.addEventListener('click', () => {
+      barMenu.classList.add('hidden');
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs && tabs[0];
+        if (!tab || !/^https?:\/\//.test(tab.url || '')) {
+          showToast('Open a web page first, then summarize.');
+          return;
+        }
+        chrome.scripting.executeScript(
+          { target: { tabId: tab.id }, func: extractPageText },
+          (results) => {
+            if (chrome.runtime.lastError || !results || !results[0] || !results[0].result) {
+              showToast('Could not read this page.');
+              return;
+            }
+            const data = results[0].result;
+            if (!data.text) {
+              showToast('Nothing readable on this page.');
+              return;
+            }
+            consumeAiHandoff({
+              prompt: `Summarize the key points from "${data.title || 'this page'}" (${data.url}):\n\n"""\n${data.text}\n"""`,
+              title: data.title,
+              url: data.url,
+            });
+          }
+        );
+      });
+    });
+  }
 
   barMinimize.addEventListener('click', () => {
     loadUrl(currentAiProvider);

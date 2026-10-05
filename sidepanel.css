@@ -76,6 +76,7 @@ body, html {
   height: 100%;
   width: 100%;
   flex-direction: row;
+  position: relative;
 }
 
 /* ==================== Nav Strip ==================== */
@@ -186,6 +187,29 @@ body, html {
 }
 
 .rail-tip.hidden {
+  display: none;
+}
+
+/* Toast: transient confirmations (AI handoff, copies). Bottom-centered pill
+   inside the narrow panel, above frames but below modals. */
+.toast {
+  position: absolute;
+  left: 12px;
+  right: 64px;
+  bottom: 14px;
+  background: var(--tip-bg);
+  color: var(--tip-ink);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  padding: 9px 12px;
+  border-radius: 9px;
+  box-shadow: var(--shadow-pop);
+  pointer-events: none;
+  z-index: 55;
+}
+
+.toast.hidden {
   display: none;
 }
 

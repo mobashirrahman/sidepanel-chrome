@@ -29,7 +29,36 @@ const FRAMING_HEADERS = [
   { header: 'x-frame-options', operation: 'remove' },
   { header: 'content-security-policy', operation: 'remove' },
   { header: 'content-security-policy-report-only', operation: 'remove' },
+  // x.com serves `cross-origin-resource-policy: same-origin` on top of
+  // X-Frame-Options + frame-ancestors, so stripping only the framing headers
+  // still leaves Chrome's "refused to connect" page. COEP/COOP can block
+  // framing the same way on other sites, so strip the whole cross-origin
+  // isolation family for the panel's sub_frames.
+  { header: 'cross-origin-resource-policy', operation: 'remove' },
+  { header: 'cross-origin-embedder-policy', operation: 'remove' },
+  { header: 'cross-origin-opener-policy', operation: 'remove' },
 ];
+
+/**
+ * Media hosts that must keep the desktop User-Agent. With the mobile UA,
+ * www.youtube.com answers 302 to m.youtube.com, whose player is built for
+ * foreground-only playback and pauses as soon as the frame is backgrounded.
+ * The desktop player keeps audio going, so these domains get framing-header
+ * stripping but never the Android spoof. Kept in registrable-domain form to
+ * match what hostnames() produces.
+ */
+const DESKTOP_UA_HOSTS = [
+  'youtube.com',
+  'youtu.be',
+  'spotify.com',
+  'soundcloud.com',
+  'twitch.tv',
+  'netflix.com',
+];
+
+function isDesktopUaHost(domain) {
+  return DESKTOP_UA_HOSTS.some((h) => domain === h || domain.endsWith('.' + h));
+}
 
 /**
  * Reduces a hostname to its registrable domain (last two labels), because
@@ -84,7 +113,18 @@ function spoofMobileUserAgentRule(requestDomains) {
     priority: 2,
     action: {
       type: 'modifyHeaders',
-      requestHeaders: [{ header: 'User-Agent', operation: 'set', value: ANDROID_UA }],
+      // The UA says Android, so the client hints must agree. Chrome keeps
+      // sending the host's real (desktop) hints otherwise, and that
+      // UA/hints mismatch is a classic bot signal: Cloudflare-fronted sites
+      // such as chatgpt.com answer with harder challenges that can stall
+      // inside a sandboxed frame. (Instagram already does the same dance
+      // for iOS in spoofInstagramAssetsRule.)
+      requestHeaders: [
+        { header: 'User-Agent', operation: 'set', value: ANDROID_UA },
+        { header: 'Sec-Ch-Ua', operation: 'set', value: '"Chromium";v="116", "Not)A;Brand";v="24", "Google Chrome";v="116"' },
+        { header: 'Sec-Ch-Ua-Mobile', operation: 'set', value: '?1' },
+        { header: 'Sec-Ch-Ua-Platform', operation: 'set', value: '"Android"' },
+      ],
     },
     condition: {
       requestDomains,
@@ -137,11 +177,14 @@ async function sync(sources) {
     ? []
     : [sources?.aiProvider, sources?.defaultSearchEngine].filter(Boolean);
   const requestDomains = hostnames(pinnedSites, extraUrls);
+  // Media hosts stay on their desktop player (see DESKTOP_UA_HOSTS), so keep
+  // them out of the mobile-UA rule while still stripping framing headers.
+  const mobileDomains = requestDomains.filter((d) => !isDesktopUaHost(d));
 
   const addRules = requestDomains.length
     ? [
         stripFramingHeadersRule(requestDomains),
-        spoofMobileUserAgentRule(requestDomains),
+        mobileDomains.length ? spoofMobileUserAgentRule(mobileDomains) : null,
         spoofInstagramAssetsRule(requestDomains),
       ].filter(Boolean)
     : [];
@@ -187,4 +230,4 @@ function install(fallbacks) {
   });
 }
 
-globalThis.SidekickFrameRules = { install, sync, hostnames, registrableDomain, RULE_IDS };
+globalThis.SidekickFrameRules = { install, sync, hostnames, registrableDomain, RULE_IDS, isDesktopUaHost };
